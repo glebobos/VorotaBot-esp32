@@ -2,7 +2,7 @@
 
 A production-grade dual gate controller firmware for **Seeed Studio XIAO ESP32-C3**, designed to operate an **internal garage door (Hörmann ProMatic 3)** and an **external street/driveway gate (Nice remote)**.
 
-Built on the `esp32-template` architecture — featuring **100% Docker-based builds with zero host dependencies**, Bluetooth (NimBLE) provisioning, WireGuard VPN client, AWS Route 53 dynamic DNS registration, and a local cyber-industrial web portal.
+Built on the `esp32-template` architecture — featuring **100% Docker-based builds with zero host dependencies**, WireGuard VPN client, AWS Route 53 dynamic DNS registration, and a local cyber-industrial web portal.
 
 ---
 
@@ -117,19 +117,12 @@ The second RDC1-2R module connects directly to the button pads of the Nice remot
 * Falls back to SoftAP captive portal (`VorotaBot-AP`, password: `12345678`) if disconnected.
 * Local portal accessible at `http://192.168.4.1/` or `http://vorota.local/`.
 
-### 2. Bluetooth (NimBLE) Provisioning & VPN Remote Toggle
-* Advertises as **VorotaBot** with custom 128-bit GATT service:
-  * **Wi-Fi SSID & Password Characteristics:** Configure home Wi-Fi credentials over Bluetooth.
-  * **WireGuard Toggle Characteristic:** Remotely enable or disable the VPN tunnel over Bluetooth without needing local network access.
-  * **Gate Action Characteristic:** Trigger gate actions directly over Bluetooth.
-* **Web Bluetooth API:** Pair and configure directly from your smartphone's Chrome browser without downloading any third-party app!
-
-### 3. WireGuard VPN Client
+### 2. WireGuard VPN Client
 * Embedded client connects directly to your AWS WireGuard server (e.g. BelKeeper VPN).
 * Time is automatically synchronized via SNTP before the handshake.
 * Assigned IP (`10.0.0.X`) allows secure remote control from anywhere over the VPN.
 
-### 4. AWS Route 53 Dynamic DNS
+### 3. AWS Route 53 Dynamic DNS
 * Direct SigV4 authenticated HTTPS client running on the ESP32.
 * Automatically registers/updates an `A` record (`vorota.<root_domain>` $\rightarrow$ ESP32 WireGuard IP).
 
@@ -196,11 +189,10 @@ VorotaBot-esp32/
 │   └── generate_nvs.py            # Dockerized NVS partition generator
 ├── firmware/
 │   ├── partitions.csv             # 4MB Dual-OTA (1.4MB each) + 1.15MB SPIFFS
-│   ├── sdkconfig.defaults         # NimBLE, mbedTLS, LwIP defaults
+│   ├── sdkconfig.defaults         # Flash, mbedTLS, LwIP defaults
 │   ├── CMakeLists.txt
 │   ├── components/
 │   │   ├── gate_controller/       # Dual RDC1-2R relay modules (ULN2003)
-│   │   ├── ble_service/           # NimBLE GATT Wi-Fi provisioning & VPN toggle
 │   │   ├── wireguard_manager/     # WireGuard client & SNTP time sync
 │   │   ├── aws_route53/           # SigV4 Route 53 dynamic DNS updater
 │   │   ├── wifi_manager/          # SoftAP + STA Wi-Fi manager

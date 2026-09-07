@@ -5,7 +5,6 @@
 #include "gate_controller.h"
 #include "wireguard_manager.h"
 #include "aws_route53.h"
-#include "ble_service.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -322,7 +321,6 @@ static esp_err_t api_wireguard_toggle_handler(httpd_req_t *req) {
     }
 
     wireguard_manager_set_enabled(enable);
-    ble_service_set_vpn_state(enable);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, enable ? "{\"status\":\"ok\",\"vpn\":\"enabled\"}" : "{\"status\":\"ok\",\"vpn\":\"disabled\"}");

@@ -29,7 +29,6 @@ sequenceDiagram
 | `dns_server` | 5 | 4096 B | 0 | Listens on UDP port 53 for captive portal DNS probes |
 | `httpd` | 5 | 8192 B | 0 | ESP HTTP daemon serving REST APIs and static SPIFFS assets |
 | `gate_pulse_task` | 5 | 3072 B | 0 | Consumes pulse queue to energize relay channels safely |
-| `nimble_host` | 5 | 4096 B | 0 | NimBLE Bluetooth host task for GATT Wi-Fi and VPN provisioning |
 
 ---
 

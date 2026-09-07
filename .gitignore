@@ -1,0 +1,35 @@
+# Build output directories
+build/
+dist/
+firmware/build/
+firmware/managed_components/
+firmware/spiffs_image/*
+!firmware/spiffs_image/.gitkeep
+frontend/dist/
+frontend/node_modules/
+
+# ESP-IDF generated files
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.orig
+
+# Logs & scratch
+*.log
+scratch/

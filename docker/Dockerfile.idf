@@ -1,0 +1,6 @@
+FROM espressif/idf:v5.4
+
+# Set non-interactive debian frontend
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /project

@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "lwip/ip_addr.h"
 #include <string.h>
 
@@ -13,8 +14,37 @@ static const char *TAG = "WIFI_MGR";
 static esp_netif_t *s_ap_netif = NULL;
 static esp_netif_t *s_sta_netif = NULL;
 static wifi_mgr_config_t s_config;
-static int s_sta_retry_count = 0;
-static const int MAX_STA_RETRIES = 5;
+static esp_timer_handle_t s_sta_retry_timer = NULL;
+static uint32_t s_sta_retry_count = 0;
+#define STA_RETRY_INTERVAL_MS 30000 // 30 seconds
+
+static void stop_sta_retry_timer(void) {
+    if (s_sta_retry_timer && esp_timer_is_active(s_sta_retry_timer)) {
+        esp_timer_stop(s_sta_retry_timer);
+    }
+}
+
+static void start_sta_retry_timer(void) {
+    if (s_sta_retry_timer) {
+        stop_sta_retry_timer();
+        // Fast retry (3s) for the first 3 attempts to quickly recover from AP glitches; 30s for long-term retries
+        uint32_t interval_ms = (s_sta_retry_count < 3) ? 3000 : STA_RETRY_INTERVAL_MS;
+        ESP_LOGI(TAG, "Scheduling Wi-Fi STA retry in %u seconds... (attempt %u)", (unsigned int)(interval_ms / 1000), (unsigned int)(s_sta_retry_count + 1));
+        esp_timer_start_once(s_sta_retry_timer, (uint64_t)interval_ms * 1000ULL);
+    }
+}
+
+static void sta_retry_timer_cb(void *arg) {
+    if (s_config.sta_enabled && !s_config.sta_connected) {
+        s_sta_retry_count++;
+        ESP_LOGI(TAG, "Attempting Wi-Fi STA reconnection (attempt %lu)...", (unsigned long)s_sta_retry_count);
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_connect returned error: %s. Re-arming retry timer...", esp_err_to_name(err));
+            start_sta_retry_timer();
+        }
+    }
+}
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data) {
@@ -40,14 +70,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                 }
                 break;
             case WIFI_EVENT_STA_DISCONNECTED: {
+                wifi_event_sta_disconnected_t* disconn = (wifi_event_sta_disconnected_t*) event_data;
+                uint8_t reason = disconn ? disconn->reason : 0;
                 s_config.sta_connected = false;
                 strcpy(s_config.sta_ip, "0.0.0.0");
-                if (s_config.sta_enabled && s_sta_retry_count < MAX_STA_RETRIES) {
-                    s_sta_retry_count++;
-                    ESP_LOGW(TAG, "STA disconnected. Retry %d/%d...", s_sta_retry_count, MAX_STA_RETRIES);
-                    esp_wifi_connect();
-                } else if (s_config.sta_enabled) {
-                    ESP_LOGW(TAG, "STA connection failed after max retries. SoftAP remains active.");
+                ESP_LOGW(TAG, "STA disconnected (reason: %u).", reason);
+                if (s_config.sta_enabled) {
+                    start_sta_retry_timer();
                 }
                 break;
             }
@@ -59,8 +88,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
             s_config.sta_connected = true;
             s_sta_retry_count = 0;
+            stop_sta_retry_timer();
             snprintf(s_config.sta_ip, sizeof(s_config.sta_ip), IPSTR, IP2STR(&event->ip_info.ip));
-            ESP_LOGI(TAG, "STA got IP address: %s", s_config.sta_ip);
+            ESP_LOGI(TAG, "STA connected successfully! IP address: %s", s_config.sta_ip);
         }
     }
 }
@@ -139,6 +169,17 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config));
     }
 
+    if (s_sta_retry_timer == NULL) {
+        const esp_timer_create_args_t timer_args = {
+            .callback = &sta_retry_timer_cb,
+            .name = "sta_retry_tmr"
+        };
+        esp_err_t tmr_err = esp_timer_create(&timer_args, &s_sta_retry_timer);
+        if (tmr_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create STA retry timer: %s", esp_err_to_name(tmr_err));
+        }
+    }
+
     ESP_ERROR_CHECK(esp_wifi_start());
     return ESP_OK;
 }
@@ -176,13 +217,15 @@ esp_err_t wifi_manager_set_ap_credentials(const char *ssid, const char *password
 esp_err_t wifi_manager_set_sta_credentials(const char *ssid, const char *password) {
     if (!ssid || strlen(ssid) == 0) return ESP_ERR_INVALID_ARG;
     
+    stop_sta_retry_timer();
+    s_sta_retry_count = 0;
+
     nvs_manager_set_str("sta_ssid", ssid);
     nvs_manager_set_str("sta_pass", password ? password : "");
     
     strncpy(s_config.sta_ssid, ssid, sizeof(s_config.sta_ssid) - 1);
     strncpy(s_config.sta_password, password ? password : "", sizeof(s_config.sta_password) - 1);
     s_config.sta_enabled = true;
-    s_sta_retry_count = 0;
     
     esp_wifi_set_mode(WIFI_MODE_APSTA);
     
@@ -196,6 +239,9 @@ esp_err_t wifi_manager_set_sta_credentials(const char *ssid, const char *passwor
 }
 
 esp_err_t wifi_manager_disable_sta(void) {
+    stop_sta_retry_timer();
+    s_sta_retry_count = 0;
+
     nvs_manager_erase_key("sta_ssid");
     nvs_manager_erase_key("sta_pass");
     

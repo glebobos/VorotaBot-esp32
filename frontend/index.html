@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="theme-color" content="#070a11" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="theme-color" content="#ebf0f5" />
   <title>VorotaBot • Gate Controller</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -53,23 +53,20 @@
         </div>
       </header>
 
-      <!-- 2 Gate Control Cards (Hörmann & Nice) -->
+      <!-- 2 Gate Control Cards (Garage & Gate) -->
       <main class="gate-cards-container">
-        <!-- Card 1: Hörmann ProMatic (Garage) -->
+        <!-- Card 1: Garage -->
         <section class="gate-card gate-card-garage" id="card-garage">
           <div class="gate-card-header">
             <div class="gate-card-title-group">
               <div class="gate-card-icon-badge">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M3 21V9l9-6 9 6v12"></path>
                   <path d="M7 21v-8h10v8"></path>
                   <line x1="7" y1="17" x2="17" y2="17"></line>
                 </svg>
               </div>
-              <div>
-                <h2 class="gate-card-name">Garage</h2>
-                <div class="gate-card-meta">Hörmann ProMatic • Term 21 / 23</div>
-              </div>
+              <h2 class="gate-card-name">Garage</h2>
             </div>
             <div class="gate-state-pill" id="badge-garage-state">
               <span class="status-pulse-dot" id="dot-garage"></span>
@@ -78,60 +75,44 @@
           </div>
 
           <div class="gate-actions-row">
-            <!-- Action 1: Full Cycle -->
-            <button class="action-btn action-btn-full" id="btn-garage-full" aria-label="Hörmann Full Cycle">
-              <div class="btn-glow"></div>
-              <div class="btn-inner">
-                <div class="btn-icon">
-                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="7 10 12 5 17 10"></polyline>
-                    <polyline points="17 14 12 19 7 14"></polyline>
-                  </svg>
-                </div>
-                <div class="btn-text">
-                  <span class="btn-title">Full Cycle</span>
-                  <span class="btn-desc">Open ↔ Stop ↔ Close</span>
-                </div>
+            <!-- Action 1: Toggle -->
+            <button class="action-btn action-btn-cycle" id="btn-garage-full" aria-label="Garage Toggle">
+              <div class="btn-knob knob-blue">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="7 10 12 5 17 10"></polyline>
+                  <polyline points="17 14 12 19 7 14"></polyline>
+                </svg>
               </div>
-              <span class="btn-feedback" id="feedback-garage-full">TAP TO CYCLE</span>
+              <span class="btn-title">Toggle</span>
+              <span class="btn-feedback" id="feedback-garage-full"></span>
             </button>
 
-            <!-- Action 2: Ventilation (Teilöffnung) -->
-            <button class="action-btn action-btn-vent" id="btn-garage-vent" aria-label="Hörmann Ventilation">
-              <div class="btn-glow"></div>
-              <div class="btn-inner">
-                <div class="btn-icon">
-                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"></path>
-                  </svg>
-                </div>
-                <div class="btn-text">
-                  <span class="btn-title">Ventilation</span>
-                  <span class="btn-desc">Teilöffnung • Partial</span>
-                </div>
+            <!-- Action 2: Vent -->
+            <button class="action-btn action-btn-vent" id="btn-garage-vent" aria-label="Garage Vent">
+              <div class="btn-knob knob-amber">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"></path>
+                </svg>
               </div>
-              <span class="btn-feedback" id="feedback-garage-vent">TAP TO VENT</span>
+              <span class="btn-title">Vent</span>
+              <span class="btn-feedback" id="feedback-garage-vent"></span>
             </button>
           </div>
         </section>
 
-        <!-- Card 2: Nice Remote Controller (Driveway) -->
+        <!-- Card 2: Gate -->
         <section class="gate-card gate-card-driveway" id="card-driveway">
           <div class="gate-card-header">
             <div class="gate-card-title-group">
               <div class="gate-card-icon-badge">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M2 19h20"></path>
                   <path d="M4 19V6l2-2 2 2v13"></path>
                   <path d="M16 19V6l2-2 2 2v13"></path>
                   <path d="M8 8h8M8 12h8M8 16h8"></path>
-                  <circle cx="12" cy="12" r="1.5" fill="currentColor"></circle>
                 </svg>
               </div>
-              <div>
-                <h2 class="gate-card-name">Driveway Gate</h2>
-                <div class="gate-card-meta">Nice Remote • Button 1 / 2</div>
-              </div>
+              <h2 class="gate-card-name">Gate</h2>
             </div>
             <div class="gate-state-pill" id="badge-driveway-state">
               <span class="status-pulse-dot" id="dot-driveway"></span>
@@ -140,40 +121,28 @@
           </div>
 
           <div class="gate-actions-row">
-            <!-- Action 1: Open Only -->
-            <button class="action-btn action-btn-open" id="btn-driveway-open" aria-label="Nice Open Button">
-              <div class="btn-glow"></div>
-              <div class="btn-inner">
-                <div class="btn-icon">
-                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="12" y1="19" x2="12" y2="5"></line>
-                    <polyline points="5 12 12 5 19 12"></polyline>
-                  </svg>
-                </div>
-                <div class="btn-text">
-                  <span class="btn-title">Open</span>
-                  <span class="btn-desc">Open ↔ Stop ↔ Open</span>
-                </div>
+            <!-- Action 1: Open -->
+            <button class="action-btn action-btn-open" id="btn-driveway-open" aria-label="Gate Open">
+              <div class="btn-knob knob-green">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="19" x2="12" y2="5"></line>
+                  <polyline points="5 12 12 5 19 12"></polyline>
+                </svg>
               </div>
-              <span class="btn-feedback" id="feedback-driveway-open">TAP TO OPEN</span>
+              <span class="btn-title">Open</span>
+              <span class="btn-feedback" id="feedback-driveway-open"></span>
             </button>
 
-            <!-- Action 2: Close Only -->
-            <button class="action-btn action-btn-close" id="btn-driveway-close" aria-label="Nice Close Button">
-              <div class="btn-glow"></div>
-              <div class="btn-inner">
-                <div class="btn-icon">
-                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                    <polyline points="19 12 12 19 5 12"></polyline>
-                  </svg>
-                </div>
-                <div class="btn-text">
-                  <span class="btn-title">Close</span>
-                  <span class="btn-desc">Close ↔ Stop ↔ Close</span>
-                </div>
+            <!-- Action 2: Close -->
+            <button class="action-btn action-btn-close" id="btn-driveway-close" aria-label="Gate Close">
+              <div class="btn-knob knob-pink">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <polyline points="19 12 12 19 5 12"></polyline>
+                </svg>
               </div>
-              <span class="btn-feedback" id="feedback-driveway-close">TAP TO CLOSE</span>
+              <span class="btn-title">Close</span>
+              <span class="btn-feedback" id="feedback-driveway-close"></span>
             </button>
           </div>
         </section>
@@ -183,7 +152,7 @@
       <footer class="bottom-bar">
         <div class="status-msg" id="activity-banner">
           <span class="msg-dot" id="activity-dot"></span>
-          <span class="msg-text" id="activity-text">Select an action for Hörmann or Nice gate</span>
+          <span class="msg-text" id="activity-text">Ready</span>
         </div>
       </footer>
     </div>

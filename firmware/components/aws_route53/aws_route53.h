@@ -53,6 +53,13 @@ void aws_route53_get_status(aws_route53_status_t *out_status);
  */
 esp_err_t aws_route53_sync_record(const char *ip_to_register);
 
+/**
+ * @brief Check if Route 53 DNS record is already synced.
+ *
+ * @return true if record was successfully synced to Route 53.
+ */
+bool aws_route53_is_synced(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -12,11 +12,13 @@ import subprocess
 
 def parse_wireguard_conf(conf_path_or_str):
     content = ""
-    if os.path.exists(conf_path_or_str):
+    if os.path.isfile(conf_path_or_str):
         with open(conf_path_or_str, "r") as f:
             content = f.read()
-    else:
+    elif "\n" in conf_path_or_str or "[Interface]" in conf_path_or_str:
         content = conf_path_or_str
+    else:
+        raise FileNotFoundError(f"WireGuard config file not found: {conf_path_or_str}")
 
     parsed = {
         "wg_priv": "",
@@ -84,11 +86,13 @@ def main():
     # WireGuard
     if args.wg_config:
         wg = parse_wireguard_conf(args.wg_config)
-        if wg["wg_priv"]: csv_lines.append(f"wg_priv,data,string,{wg['wg_priv']}")
+        if not wg["wg_priv"] or not wg["wg_peer_pub"] or not wg["wg_endp"]:
+            raise ValueError(f"WireGuard config missing required fields! priv={'OK' if wg['wg_priv'] else 'MISSING'}, pub={'OK' if wg['wg_peer_pub'] else 'MISSING'}, endp={'OK' if wg['wg_endp'] else 'MISSING'}")
+        csv_lines.append(f"wg_priv,data,string,{wg['wg_priv']}")
         if wg["wg_addr"]: csv_lines.append(f"wg_addr,data,string,{wg['wg_addr']}")
-        if wg["wg_peer_pub"]: csv_lines.append(f"wg_peer_pub,data,string,{wg['wg_peer_pub']}")
+        csv_lines.append(f"wg_peer_pub,data,string,{wg['wg_peer_pub']}")
         if wg.get("wg_psk"): csv_lines.append(f"wg_psk,data,string,{wg['wg_psk']}")
-        if wg["wg_endp"]: csv_lines.append(f"wg_endp,data,string,{wg['wg_endp']}")
+        csv_lines.append(f"wg_endp,data,string,{wg['wg_endp']}")
         csv_lines.append(f"wg_port,data,i32,{wg['wg_port']}")
         csv_lines.append(f"wg_allow,data,string,{wg['wg_allow']}")
         csv_lines.append(f"wg_ka,data,i32,{wg['wg_ka']}")

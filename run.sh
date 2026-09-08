@@ -215,11 +215,17 @@ generate_provision_bin() {
   GEN_ARGS=()
   if [ -n "$WG_CONFIG" ]; then
     if [ -f "$WG_CONFIG" ]; then
-      cp "$WG_CONFIG" dist/wg_provision.conf
+      if [ "$(realpath "$WG_CONFIG")" != "$(realpath dist/wg_provision.conf 2>/dev/null)" ]; then
+        cp "$WG_CONFIG" dist/wg_provision.conf
+      fi
       GEN_ARGS+=(--wg-config /project/dist/wg_provision.conf)
     else
-      GEN_ARGS+=(--wg-config "$WG_CONFIG")
+      log_error "WireGuard config '$WG_CONFIG' does not exist!"
+      exit 1
     fi
+  elif [ -f "dist/wg_provision.conf" ]; then
+    log_info "Reusing existing WireGuard configuration from dist/wg_provision.conf"
+    GEN_ARGS+=(--wg-config /project/dist/wg_provision.conf)
   fi
   if [ -n "$AWS_KEY" ]; then GEN_ARGS+=(--aws-access-key "$AWS_KEY"); fi
   if [ -n "$AWS_SECRET" ]; then GEN_ARGS+=(--aws-secret-key "$AWS_SECRET"); fi
@@ -231,6 +237,21 @@ generate_provision_bin() {
 
   run_cmd docker run --rm -v "$(pwd):/project" -w /project vorotabot-idf python3 /project/scripts/generate_nvs.py "${GEN_ARGS[@]}"
   log_success "NVS binary generated at dist/nvs_config.bin"
+}
+
+# Direct serial monitor helper (uses esp_idf_monitor directly without invoking cmake/ninja rebuild)
+run_monitor() {
+  log_info "Opening serial monitor on $PORT at $BAUD baud... (Press Ctrl+] to exit)"
+  local elf_arg=""
+  if [ -f "firmware/build/vorotabot_esp32.elf" ]; then
+    elf_arg="/project/build/vorotabot_esp32.elf"
+  fi
+
+  if [ "$DRY_RUN" = true ]; then
+    echo -e "${YELLOW}[DRY-RUN]${NC} docker run -it --rm --privileged --device $PORT -v $(pwd)/firmware:/project -w /project vorotabot-idf python3 -m esp_idf_monitor -p $PORT -b $BAUD --target esp32c3 $elf_arg"
+  else
+    docker run -it --rm --privileged --device "$PORT" -v "$(pwd)/firmware:/project" -w /project vorotabot-idf python3 -m esp_idf_monitor -p "$PORT" -b "$BAUD" --target esp32c3 $elf_arg
+  fi
 }
 
 case "$CMD" in
@@ -261,7 +282,13 @@ case "$CMD" in
     ;;
     
   flash)
-    if [ -n "$WG_CONFIG" ] || [ -n "$AWS_KEY" ] || [ -n "$WIFI_SSID" ]; then
+    if [ ! -f "firmware/build/flash_args" ]; then
+      log_info "Build artifacts not found. Building firmware..."
+      run_cmd docker run --rm -v "$(pwd)/firmware:/project" -w /project vorotabot-idf idf.py build
+    fi
+    if [ -n "$WG_CONFIG" ] || [ -n "$AWS_KEY" ] || [ -n "$ROOT_DOMAIN" ] || [ -n "$WIFI_SSID" ]; then
+      generate_provision_bin
+    elif [ ! -f "dist/nvs_config.bin" ] && [ -f "dist/wg_provision.conf" ]; then
       generate_provision_bin
     fi
     log_info "Flashing firmware to device on $PORT at $BAUD baud..."
@@ -274,16 +301,17 @@ case "$CMD" in
     ;;
     
   monitor)
-    log_info "Opening serial monitor on $PORT at $BAUD baud... (Press Ctrl+] to exit)"
-    if [ "$DRY_RUN" = true ]; then
-      echo -e "${YELLOW}[DRY-RUN]${NC} docker run -it --rm --privileged --device $PORT -v $(pwd)/firmware:/project -w /project vorotabot-idf idf.py -p $PORT -b $BAUD monitor"
-    else
-      docker run -it --rm --privileged --device "$PORT" -v "$(pwd)/firmware:/project" -w /project vorotabot-idf idf.py -p "$PORT" -b "$BAUD" monitor
-    fi
+    run_monitor
     ;;
     
   flash-monitor)
+    if [ ! -f "firmware/build/flash_args" ]; then
+      log_info "Build artifacts not found. Building firmware..."
+      run_cmd docker run --rm -v "$(pwd)/firmware:/project" -w /project vorotabot-idf idf.py build
+    fi
     if [ -n "$WG_CONFIG" ] || [ -n "$AWS_KEY" ] || [ -n "$ROOT_DOMAIN" ] || [ -n "$WIFI_SSID" ]; then
+      generate_provision_bin
+    elif [ ! -f "dist/nvs_config.bin" ] && [ -f "dist/wg_provision.conf" ]; then
       generate_provision_bin
     fi
     log_info "Flashing firmware to device on $PORT at $BAUD baud..."
@@ -292,12 +320,7 @@ case "$CMD" in
       log_info "Flashing provisioned NVS partition at 0x9000..."
       run_cmd docker run --rm --privileged --device "$PORT" -v "$(pwd):/project" -w /project vorotabot-idf esptool.py --chip esp32c3 -p "$PORT" -b "$BAUD" write_flash 0x9000 dist/nvs_config.bin
     fi
-    log_info "Opening serial monitor on $PORT... (Press Ctrl+] to exit)"
-    if [ "$DRY_RUN" = true ]; then
-      echo -e "${YELLOW}[DRY-RUN]${NC} docker run -it --rm --privileged --device $PORT -v $(pwd)/firmware:/project -w /project vorotabot-idf idf.py -p $PORT -b $BAUD monitor"
-    else
-      docker run -it --rm --privileged --device "$PORT" -v "$(pwd)/firmware:/project" -w /project vorotabot-idf idf.py -p "$PORT" -b "$BAUD" monitor
-    fi
+    run_monitor
     ;;
     
   all)
@@ -312,12 +335,7 @@ case "$CMD" in
       log_info "Flashing provisioned NVS partition at 0x9000..."
       run_cmd docker run --rm --privileged --device "$PORT" -v "$(pwd):/project" -w /project vorotabot-idf esptool.py --chip esp32c3 -p "$PORT" -b "$BAUD" write_flash 0x9000 dist/nvs_config.bin
     fi
-    log_info "Opening serial monitor on $PORT... (Press Ctrl+] to exit)"
-    if [ "$DRY_RUN" = true ]; then
-      echo -e "${YELLOW}[DRY-RUN]${NC} docker run -it --rm --privileged --device $PORT -v $(pwd)/firmware:/project -w /project vorotabot-idf idf.py -p $PORT -b $BAUD monitor"
-    else
-      docker run -it --rm --privileged --device "$PORT" -v "$(pwd)/firmware:/project" -w /project vorotabot-idf idf.py -p "$PORT" -b "$BAUD" monitor
-    fi
+    run_monitor
     ;;
 
   build-ota)

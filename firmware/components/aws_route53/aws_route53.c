@@ -60,6 +60,9 @@ static esp_err_t load_config_from_nvs(void) {
                               strlen(s_config.record_hostname) > 0);
     snprintf(s_status.fqdn, sizeof(s_status.fqdn), "%s", s_config.record_hostname);
 
+    nvs_manager_get_str("r53_ip", s_status.registered_ip, sizeof(s_status.registered_ip), "");
+    s_status.is_synced = (strlen(s_status.registered_ip) > 0);
+
     xSemaphoreGive(s_lock);
     return ESP_OK;
 }
@@ -216,6 +219,7 @@ static void execute_route53_update(const char *ip) {
         s_status.last_sync_epoch = (uint32_t)now;
         snprintf(s_status.registered_ip, sizeof(s_status.registered_ip), "%s", ip);
         s_status.last_error[0] = '\0';
+        nvs_manager_set_str("r53_ip", ip);
     } else {
         ESP_LOGE(TAG, "Route 53 update failed: err=%s, HTTP status=%d", esp_err_to_name(err), status_code);
         s_status.is_synced = false;
@@ -265,6 +269,9 @@ esp_err_t aws_route53_set_config(const aws_route53_config_t *config) {
                               strlen(s_config.hosted_zone_id) > 0 &&
                               strlen(s_config.record_hostname) > 0);
     snprintf(s_status.fqdn, sizeof(s_status.fqdn), "%s", s_config.record_hostname);
+    s_status.is_synced = false;
+    s_status.registered_ip[0] = '\0';
+    nvs_manager_erase_key("r53_ip");
     xSemaphoreGive(s_lock);
 
     ESP_LOGI(TAG, "AWS Route 53 configuration saved to NVS");
@@ -305,4 +312,12 @@ esp_err_t aws_route53_sync_record(const char *ip_to_register) {
     }
 
     return ESP_OK;
+}
+
+bool aws_route53_is_synced(void) {
+    if (s_lock == NULL) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool synced = s_status.is_synced;
+    xSemaphoreGive(s_lock);
+    return synced;
 }

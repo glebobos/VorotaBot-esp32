@@ -20,10 +20,16 @@ static const char *TAG = "VOROTA_MAIN";
 
 /* Callback when WireGuard connects and acquires tunnel IP */
 static void on_wireguard_connected(const char *tunnel_ip) {
-    ESP_LOGI(TAG, "WireGuard tunnel is active with IP: %s. Initiating Route 53 DNS sync...", tunnel_ip);
+    ESP_LOGI(TAG, "WireGuard tunnel is active with IP: %s", tunnel_ip);
 
-    // Register hostname in Route 53 pointing to WireGuard IP
-    aws_route53_sync_record(tunnel_ip);
+    aws_route53_status_t r53_st;
+    aws_route53_get_status(&r53_st);
+    if (r53_st.is_synced && strcmp(r53_st.registered_ip, tunnel_ip) == 0) {
+        ESP_LOGI(TAG, "Route 53 DNS record is already synced for IP %s. Skipping update.", tunnel_ip);
+    } else {
+        ESP_LOGI(TAG, "Route 53 DNS record not yet synced for IP %s. Initiating update...", tunnel_ip);
+        aws_route53_sync_record(tunnel_ip);
+    }
 }
 
 /* Wi-Fi and IP Event Handler */

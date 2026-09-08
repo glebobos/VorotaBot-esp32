@@ -97,55 +97,57 @@ class VorotaBotApp {
     }
   }
 
+  private activityTimer: number | null = null;
+
   /* -------------------------------------------------------------
-   * 4 Dedicated Gate Actions (Hörmann Full/Vent, Nice Open/Close)
+   * 4 Dedicated Gate Actions (Garage Toggle/Vent, Gate Open/Close)
    * ------------------------------------------------------------- */
   private initGateActions(): void {
-    // Hörmann Garage: Full Cycle
+    // Garage: Toggle
     document.getElementById('btn-garage-full')?.addEventListener('click', () => {
       this.triggerGateAction(
         'garage',
         'full',
         'btn-garage-full',
         'feedback-garage-full',
-        'TAP TO CYCLE',
-        'Hörmann Full Cycle'
+        '',
+        'Garage'
       );
     });
 
-    // Hörmann Garage: Ventilation (Teilöffnung)
+    // Garage: Vent
     document.getElementById('btn-garage-vent')?.addEventListener('click', () => {
       this.triggerGateAction(
         'garage',
         'vent',
         'btn-garage-vent',
         'feedback-garage-vent',
-        'TAP TO VENT',
-        'Hörmann Ventilation'
+        '',
+        'Vent'
       );
     });
 
-    // Nice Driveway: Open Only
+    // Gate: Open
     document.getElementById('btn-driveway-open')?.addEventListener('click', () => {
       this.triggerGateAction(
         'driveway',
         'open',
         'btn-driveway-open',
         'feedback-driveway-open',
-        'TAP TO OPEN',
-        'Nice Open'
+        '',
+        'Gate Open'
       );
     });
 
-    // Nice Driveway: Close Only
+    // Gate: Close
     document.getElementById('btn-driveway-close')?.addEventListener('click', () => {
       this.triggerGateAction(
         'driveway',
         'close',
         'btn-driveway-close',
         'feedback-driveway-close',
-        'TAP TO CLOSE',
-        'Nice Close'
+        '',
+        'Gate Close'
       );
     });
   }
@@ -170,8 +172,8 @@ class VorotaBotApp {
     const feedback = document.getElementById(feedbackId);
 
     btn?.classList.add('triggering');
-    if (feedback) feedback.innerText = 'TRIGGERING...';
-    this.showActivity(`Sending ${displayName} impulse...`);
+    if (feedback) feedback.innerText = 'Sending...';
+    this.showActivity(`${displayName}...`);
 
     try {
       const res = await fetch(`/api/gate/${target}`, {
@@ -181,35 +183,39 @@ class VorotaBotApp {
       });
 
       if (res.ok) {
-        if (feedback) feedback.innerText = 'PULSE SENT';
-        this.showActivity(`${displayName}: Impulse triggered successfully`);
+        if (feedback) feedback.innerText = 'Sent';
+        this.showActivity(`${displayName}: Sent`);
         // Immediately refresh state
         setTimeout(() => this.fetchGateStatus(), 450);
       } else {
         const data = await res.json().catch(() => ({}));
         if (res.status === 429) {
-          if (feedback) feedback.innerText = 'WAIT (DELAY)';
-          this.showActivity(`Interlock safety delay active. Please wait.`);
+          if (feedback) feedback.innerText = 'Wait';
+          this.showActivity('Safety delay active');
         } else {
-          if (feedback) feedback.innerText = 'ERROR';
+          if (feedback) feedback.innerText = 'Error';
           this.showActivity(`${displayName}: ${data.message || `HTTP ${res.status}`}`);
         }
       }
     } catch (e: any) {
-      if (feedback) feedback.innerText = 'OFFLINE';
-      this.showActivity(`Network error: ${e.message || 'Cannot reach controller'}`);
+      if (feedback) feedback.innerText = 'Offline';
+      this.showActivity(`Network error`);
     } finally {
       setTimeout(() => {
         btn?.classList.remove('triggering');
         if (feedback) feedback.innerText = defaultLabel;
         this.busy[lockKey] = false;
-      }, 2000);
+      }, 1500);
     }
   }
 
   private showActivity(msg: string): void {
     const textEl = document.getElementById('activity-text');
     if (textEl) textEl.innerText = msg;
+    if (this.activityTimer) clearTimeout(this.activityTimer);
+    this.activityTimer = window.setTimeout(() => {
+      if (textEl) textEl.innerText = 'Ready';
+    }, 3000);
   }
 
   /* -------------------------------------------------------------

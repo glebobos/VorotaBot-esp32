@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="theme-color" content="#ebf0f5" />
+  <title>VorotaBot • Gate Controller</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app" class="app-root">
+    <!-- Main Full-Screen View -->
+    <div class="main-view">
+      <!-- Minimalist Top Bar -->
+      <header class="top-bar">
+        <div class="brand">
+          <div class="brand-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2.2" fill="none">
+              <rect x="3" y="3" width="18" height="18" rx="3"></rect>
+              <path d="M9 3v18M15 3v18"></path>
+            </svg>
+          </div>
+          <div>
+            <span class="brand-name">VorotaBot</span>
+            <span class="status-indicator">
+              <span class="dot dot-online" id="status-dot"></span>
+              <span class="status-text" id="status-text">Ready</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="top-bar-right">
+          <!-- WireGuard VPN Status Pill -->
+          <div class="vpn-pill" id="vpn-status-badge" title="WireGuard VPN Status">
+            <span class="vpn-dot" id="vpn-dot"></span>
+            <span id="vpn-badge-text">VPN</span>
+          </div>
+
+          <!-- Configuration Menu Button (...) -->
+          <button class="btn-icon btn-dots" id="btn-open-settings" aria-label="Settings and Configuration" title="Settings">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+              <circle cx="5" cy="12" r="2"></circle>
+              <circle cx="12" cy="12" r="2"></circle>
+              <circle cx="19" cy="12" r="2"></circle>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 2 Gate Control Cards (Garage & Gate) -->
+      <main class="gate-cards-container">
+        <!-- Card 1: Garage -->
+        <section class="gate-card gate-card-garage" id="card-garage">
+          <div class="gate-card-header">
+            <div class="gate-card-title-group">
+              <div class="gate-card-icon-badge">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 21V9l9-6 9 6v12"></path>
+                  <path d="M7 21v-8h10v8"></path>
+                  <line x1="7" y1="17" x2="17" y2="17"></line>
+                </svg>
+              </div>
+              <h2 class="gate-card-name">Garage</h2>
+            </div>
+            <div class="gate-state-pill" id="badge-garage-state">
+              <span class="status-pulse-dot" id="dot-garage"></span>
+              <span class="gate-state-label" id="label-garage-state">STOPPED</span>
+            </div>
+          </div>
+
+          <div class="gate-actions-row">
+            <!-- Action 1: Toggle -->
+            <button class="action-btn action-btn-cycle" id="btn-garage-full" aria-label="Garage Toggle">
+              <div class="btn-knob knob-blue">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="7 10 12 5 17 10"></polyline>
+                  <polyline points="17 14 12 19 7 14"></polyline>
+                </svg>
+              </div>
+              <span class="btn-title">Toggle</span>
+              <span class="btn-feedback" id="feedback-garage-full"></span>
+            </button>
+
+            <!-- Action 2: Vent -->
+            <button class="action-btn action-btn-vent" id="btn-garage-vent" aria-label="Garage Vent">
+              <div class="btn-knob knob-amber">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"></path>
+                </svg>
+              </div>
+              <span class="btn-title">Vent</span>
+              <span class="btn-feedback" id="feedback-garage-vent"></span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Card 2: Gate -->
+        <section class="gate-card gate-card-driveway" id="card-driveway">
+          <div class="gate-card-header">
+            <div class="gate-card-title-group">
+              <div class="gate-card-icon-badge">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 19h20"></path>
+                  <path d="M4 19V6l2-2 2 2v13"></path>
+                  <path d="M16 19V6l2-2 2 2v13"></path>
+                  <path d="M8 8h8M8 12h8M8 16h8"></path>
+                </svg>
+              </div>
+              <h2 class="gate-card-name">Gate</h2>
+            </div>
+            <div class="gate-state-pill" id="badge-driveway-state">
+              <span class="status-pulse-dot" id="dot-driveway"></span>
+              <span class="gate-state-label" id="label-driveway-state">STOPPED</span>
+            </div>
+          </div>
+
+          <div class="gate-actions-row">
+            <!-- Action 1: Open -->
+            <button class="action-btn action-btn-open" id="btn-driveway-open" aria-label="Gate Open">
+              <div class="btn-knob knob-green">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="19" x2="12" y2="5"></line>
+                  <polyline points="5 12 12 5 19 12"></polyline>
+                </svg>
+              </div>
+              <span class="btn-title">Open</span>
+              <span class="btn-feedback" id="feedback-driveway-open"></span>
+            </button>
+
+            <!-- Action 2: Close -->
+            <button class="action-btn action-btn-close" id="btn-driveway-close" aria-label="Gate Close">
+              <div class="btn-knob knob-pink">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <polyline points="19 12 12 19 5 12"></polyline>
+                </svg>
+              </div>
+              <span class="btn-title">Close</span>
+              <span class="btn-feedback" id="feedback-driveway-close"></span>
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <!-- Bottom Minimal Status / Activity Banner -->
+      <footer class="bottom-bar">
+        <div class="status-msg" id="activity-banner">
+          <span class="msg-dot" id="activity-dot"></span>
+          <span class="msg-text" id="activity-text">Ready</span>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Configuration Modal Sheet (...) -->
+    <div class="modal-backdrop" id="settings-backdrop">
+      <div class="modal-sheet" id="settings-sheet">
+        <!-- Modal Header -->
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <h2 class="modal-title">Configuration</h2>
+            <div class="modal-subtitle" id="modal-device-subtitle">VorotaBot ESP32-C3</div>
+          </div>
+          <button class="btn-icon btn-close" id="btn-close-settings" aria-label="Close configuration">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Settings Segmented Tabs -->
+        <div class="settings-tabs">
+          <button class="settings-tab-btn active" data-tab="tab-net">Network &amp; VPN</button>
+          <button class="settings-tab-btn" data-tab="tab-timings">Gate Timings</button>
+          <button class="settings-tab-btn" data-tab="tab-sys">System &amp; OTA</button>
+        </div>
+
+        <!-- Tab 1: Network & VPN -->
+        <div class="modal-body settings-panel active" id="tab-net">
+          <!-- WireGuard Card -->
+          <div class="settings-card">
+            <div class="card-title-row">
+              <div class="card-icon-title">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent-cyan)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                <span class="card-title">WireGuard VPN</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggle-vpn-switch" />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="info-grid">
+              <div class="info-row">
+                <span class="info-label">Status</span>
+                <span class="info-val badge" id="net-wg-state">Checking...</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">VPN IP</span>
+                <span class="info-val mono text-cyan" id="net-wg-ip">--</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Endpoint</span>
+                <span class="info-val mono text-sm" id="net-wg-endpoint">--</span>
+              </div>
+            </div>
+
+            <div class="form-group mt-3">
+              <label class="form-label">Update WireGuard .conf</label>
+              <textarea id="input-wg-conf" class="form-control mono text-xs" rows="4" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.7/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = wg.example.com:443"></textarea>
+            </div>
+            <button class="btn btn-secondary btn-sm btn-block" id="btn-save-wg-conf">Save WireGuard Config</button>
+          </div>
+
+          <!-- AWS Route 53 Card -->
+          <div class="settings-card">
+            <div class="card-title-row">
+              <div class="card-icon-title">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent-amber)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                <span class="card-title">Route 53 DNS</span>
+              </div>
+              <button class="btn btn-secondary btn-xs" id="btn-r53-force-sync">Sync Now</button>
+            </div>
+            <div class="info-grid">
+              <div class="info-row">
+                <span class="info-label">Domain</span>
+                <span class="info-val mono text-cyan" id="net-r53-fqdn">vorota.glebos.click</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Status</span>
+                <span class="info-val badge" id="net-r53-synced">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Wi-Fi Connection Card -->
+          <div class="settings-card">
+            <div class="card-title-row">
+              <div class="card-icon-title">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent-emerald)" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><circle cx="12" cy="20" r="1"></circle></svg>
+                <span class="card-title">Wi-Fi Connection</span>
+              </div>
+            </div>
+            <div class="info-grid mb-2">
+              <div class="info-row">
+                <span class="info-label">Current IP</span>
+                <span class="info-val mono text-emerald" id="net-wifi-ip">192.168.4.1</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">SSID</span>
+                <span class="info-val mono" id="net-wifi-ssid">SoftAP</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <input type="text" id="wifi-sta-ssid" class="form-control" placeholder="Home Wi-Fi Network" />
+            </div>
+            <div class="form-group">
+              <input type="password" id="wifi-sta-password" class="form-control" placeholder="Wi-Fi Password" />
+            </div>
+            <button class="btn btn-primary btn-sm btn-block" id="btn-connect-wifi">Connect to Wi-Fi</button>
+          </div>
+        </div>
+
+        <!-- Tab 2: Gate Timings -->
+        <div class="modal-body settings-panel" id="tab-timings">
+          <div class="settings-card">
+            <div class="card-title-row">
+              <div class="card-icon-title">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent-cyan)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span class="card-title">Hardware Pulse &amp; Interlock</span>
+              </div>
+            </div>
+            <div class="form-group mt-3">
+              <div class="range-header">
+                <span class="form-label">Pulse Duration</span>
+                <span class="range-val mono text-cyan"><span id="val-label-pulse">400</span> ms</span>
+              </div>
+              <input type="range" id="range-pulse-ms" min="150" max="1200" step="50" value="400" class="form-range" />
+              <div class="range-labels"><span>150ms</span><span>Fast (400ms)</span><span>1200ms</span></div>
+            </div>
+
+            <div class="form-group mt-3">
+              <div class="range-header">
+                <span class="form-label">Safety Interlock Delay</span>
+                <span class="range-val mono text-cyan"><span id="val-label-interlock">1500</span> ms</span>
+              </div>
+              <input type="range" id="range-interlock-ms" min="500" max="4000" step="100" value="1500" class="form-range" />
+              <div class="range-labels"><span>500ms</span><span>Default (1500ms)</span><span>4000ms</span></div>
+            </div>
+
+            <button class="btn btn-secondary btn-sm btn-block mt-3" id="btn-save-gate-timings">Save Timings</button>
+          </div>
+        </div>
+
+        <!-- Tab 3: System & OTA -->
+        <div class="modal-body settings-panel" id="tab-sys">
+          <div class="settings-card">
+            <div class="card-title-row">
+              <div class="card-icon-title">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent-cyan)" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                <span class="card-title">Diagnostics</span>
+              </div>
+            </div>
+            <div class="info-grid">
+              <div class="info-row">
+                <span class="info-label">Free Heap</span>
+                <span class="info-val mono" id="val-free-heap">-- KB</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Uptime</span>
+                <span class="info-val mono" id="val-system-uptime">00:00:00</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Wi-Fi RSSI</span>
+                <span class="info-val mono" id="val-system-rssi">-- dBm</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Running Partition</span>
+                <span class="info-val mono text-cyan" id="val-ota-part">ota_0</span>
+              </div>
+            </div>
+
+            <div class="btn-group mt-3">
+              <button class="btn btn-secondary btn-sm" id="btn-reboot">Reboot</button>
+              <button class="btn btn-danger btn-sm" id="btn-factory-reset">Factory Reset</button>
+            </div>
+          </div>
+
+          <!-- OTA Flasher Card -->
+          <div class="settings-card">
+            <div class="card-title-row">
+              <div class="card-icon-title">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent-cyan)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                <span class="card-title">Firmware OTA Flash</span>
+              </div>
+            </div>
+            <div class="drop-zone" id="ota-drop-zone">
+              <div class="drop-label">Upload <code>vorotabot_esp32.bin</code></div>
+              <div class="drop-sub">Tap to browse file</div>
+              <input type="file" id="ota-file-input" accept=".bin" style="display: none;" />
+            </div>
+
+            <div class="ota-progress-container" id="ota-progress-container" style="display: none;">
+              <div class="progress-bar-bg">
+                <div class="progress-bar-fill" id="ota-progress-bar"></div>
+              </div>
+              <div class="progress-info">
+                <span id="ota-status-text">Flashing...</span>
+                <span id="ota-percentage" class="mono bold">0%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

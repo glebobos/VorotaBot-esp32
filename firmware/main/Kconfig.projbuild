@@ -1,0 +1,37 @@
+menu "VorotaBot Device Configuration"
+
+    menu "Wi-Fi & Captive Portal"
+        config VOROTABOT_WIFI_SSID
+            string "Default SoftAP SSID"
+            default "VorotaBot-AP"
+            help
+                Default SSID broadcasted by the ESP32 SoftAP.
+
+        config VOROTABOT_WIFI_PASSWORD
+            string "Default SoftAP Password"
+            default "12345678"
+            help
+                WPA2 password for SoftAP (empty for open network).
+
+        config VOROTABOT_PORTAL_DOMAIN
+            string "Captive Portal Domain"
+            default "vorota.local"
+            help
+                Local domain name resolved by internal DNS server.
+    endmenu
+
+    menu "AWS Route 53"
+        config VOROTABOT_ROOT_DOMAIN
+            string "AWS Route 53 Root Domain"
+            default "glebos.click"
+            help
+                Default root domain name for Route 53 dynamic DNS.
+
+        config VOROTABOT_FQDN
+            string "Default FQDN Hostname"
+            default "vorota.glebos.click"
+            help
+                Default full hostname registered for the device.
+    endmenu
+
+endmenu

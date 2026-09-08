@@ -1,0 +1,23 @@
+services:
+  frontend-builder:
+    image: vorotabot-frontend
+    network_mode: host
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./firmware/spiffs_image:/app/dist
+
+  firmware-builder:
+    image: vorotabot-idf
+    network_mode: host
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.idf
+    volumes:
+      - ./firmware:/project
+    working_dir: /project
+    command: idf.py build

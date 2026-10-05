@@ -32,20 +32,17 @@ print_usage() {
   echo "Usage: ./run.sh <command> [options]"
   echo ""
   echo "Commands:"
-  echo "  build-frontend     Build and compress Vite frontend into firmware/spiffs_image/"
-  echo "  build-firmware     Compile ESP-IDF firmware & generate SPIFFS filesystem image"
-  echo "  build              Run full pipeline (frontend build -> firmware compile)"
-  echo "  provision          Generate & flash NVS credentials (WireGuard, AWS, Wi-Fi)"
-  echo "  flash              Flash the compiled firmware and SPIFFS image to target device"
-  echo "  monitor            Start interactive ESP-IDF serial monitor"
+  echo "  build              Build everything (Frontend + Firmware -> dist/firmware-update.bin)"
+  echo "  flash              Flash firmware to target ESP32 via USB"
+  echo "  monitor            Start interactive serial monitor (Ctrl+] to exit)"
   echo "  flash-monitor      Flash firmware and immediately open serial monitor"
-  echo "  all                Build frontend, compile firmware, flash, and open monitor"
-  echo "  build-ota          Compile and prepare OTA binary into dist/firmware-update.bin"
-  echo "  menuconfig         Open interactive ESP-IDF configuration menu"
-  echo "  size               Analyze firmware memory usage and flash partition sizes"
+  echo "  provision          Generate & flash NVS credentials (WireGuard, AWS, Wi-Fi)"
+  echo "  clean              Remove build directories and caches"
+  echo "  size               Analyze firmware memory usage and partition sizes"
   echo "  erase-flash        Erase entire flash memory of connected ESP32"
-  echo "  clean              Remove build directories, SPIFFS assets, and docker caches"
+  echo "  menuconfig         Open interactive ESP-IDF configuration menu"
   echo "  shell              Open an interactive bash shell inside ESP-IDF container"
+
   echo ""
   echo "Provisioning & Flashing Options:"
   echo "  --port PORT              Override serial port (default: auto-detected)"
@@ -253,32 +250,41 @@ run_monitor() {
     docker run -it --rm --privileged --device "$PORT" -v "$(pwd)/firmware:/project" -w /project vorotabot-idf python3 -m esp_idf_monitor -p "$PORT" -b "$BAUD" --target esp32c3 $elf_arg
   fi
 }
-
 case "$CMD" in
+  build|build-ota)
+
+    log_info "Building complete project (Frontend + ESP-IDF Firmware)..."
+    run_cmd docker compose run --rm frontend-builder
+    if [ -f "firmware/spiffs_image/index.html.gz" ]; then
+      cp firmware/spiffs_image/index.html.gz firmware/components/web_server/index.html.gz
+    fi
+    run_cmd docker compose run --rm firmware-builder
+    mkdir -p dist
+    if [ -f "firmware/build/vorotabot_esp32.bin" ]; then
+      cp firmware/build/vorotabot_esp32.bin dist/firmware-update.bin
+      log_success "Build complete: dist/firmware-update.bin (Web UI embedded)"
+    fi
+    ;;
+
   build-frontend)
-    log_info "Building frontend assets with Vite..."
+    log_info "Building frontend assets..."
     run_cmd docker compose run --rm frontend-builder
     if [ -f "firmware/spiffs_image/index.html.gz" ]; then
       cp firmware/spiffs_image/index.html.gz firmware/components/web_server/index.html.gz
     fi
-    log_success "Frontend assets compiled, gzipped, and synced to web_server component."
+    log_success "Frontend assets compiled and synced."
     ;;
-    
+
   build-firmware)
-    log_info "Compiling ESP-IDF firmware & SPIFFS binary..."
+    log_info "Compiling ESP-IDF firmware..."
     run_cmd docker compose run --rm firmware-builder
-    log_success "Firmware compilation completed successfully."
-    ;;
-    
-  build)
-    log_info "Starting full end-to-end project build..."
-    run_cmd docker compose run --rm frontend-builder
-    if [ -f "firmware/spiffs_image/index.html.gz" ]; then
-      cp firmware/spiffs_image/index.html.gz firmware/components/web_server/index.html.gz
+    mkdir -p dist
+    if [ -f "firmware/build/vorotabot_esp32.bin" ]; then
+      cp firmware/build/vorotabot_esp32.bin dist/firmware-update.bin
     fi
-    run_cmd docker compose run --rm firmware-builder
-    log_success "Full project build completed successfully."
+    log_success "Firmware compilation completed."
     ;;
+
 
 
   provision)
@@ -345,22 +351,6 @@ case "$CMD" in
     run_monitor
     ;;
 
-  build-ota)
-    log_info "Building OTA-ready binary..."
-    run_cmd docker compose run --rm frontend-builder
-    if [ -f "firmware/spiffs_image/index.html.gz" ]; then
-      cp firmware/spiffs_image/index.html.gz firmware/components/web_server/index.html.gz
-    fi
-    run_cmd docker compose run --rm firmware-builder
-    mkdir -p dist
-    if [ -f "firmware/build/vorotabot_esp32.bin" ]; then
-      cp firmware/build/vorotabot_esp32.bin dist/firmware-update.bin
-      log_success "OTA binary generated: dist/firmware-update.bin (Web UI embedded)"
-      log_info "Upload this file via the Web Portal OTA flasher tab (http://192.168.4.1/)."
-    else
-      log_error "Could not find firmware/build/vorotabot_esp32.bin."
-    fi
-    ;;
 
     
   size)

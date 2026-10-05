@@ -137,18 +137,17 @@ The second RDC1-2R module connects directly to the button pads of the Nice remot
 
 | Command | Description |
 | :--- | :--- |
-| `./run.sh build-frontend` | Builds Vite TypeScript app & gzips to `firmware/spiffs_image/` |
-| `./run.sh build-firmware` | Compiles ESP-IDF C firmware & generates SPIFFS image |
-| `./run.sh build` | Full pipeline build (Frontend $\rightarrow$ Firmware) |
-| `./run.sh provision [flags]` | Generates NVS partition binary & flashes credentials to ESP32 |
-| `./run.sh flash` | Flashes firmware and SPIFFS filesystem to ESP32 |
+| `./run.sh build` | Full unified build (Frontend + Firmware $\rightarrow$ `dist/firmware-update.bin`) |
+| `./run.sh flash` | Flashes compiled firmware and filesystem to ESP32 over USB |
 | `./run.sh monitor` | Opens interactive serial monitor (`Ctrl+]` to exit) |
 | `./run.sh flash-monitor` | Flashes device and immediately launches serial monitor |
-| `./run.sh all [flags]` | Complete build, flash, provision, and monitor sequence |
-| `./run.sh build-ota` | Compiles OTA update binary into `dist/firmware-update.bin` |
+| `./run.sh provision [flags]` | Generates NVS partition binary & flashes credentials to ESP32 |
+| `./run.sh clean` | Removes build folders, generated images, and Docker caches |
 | `./run.sh size` | Analyzes RAM heap and flash partition usage |
 | `./run.sh erase-flash` | Erases full flash memory of connected ESP32 |
-| `./run.sh clean` | Removes build folders, generated images, and Docker caches |
+| `./run.sh menuconfig` | Opens interactive ESP-IDF configuration menu |
+| `./run.sh shell` | Opens interactive bash shell inside ESP-IDF container |
+
 
 ### Required / Supported Flags
 * `--wg-config <path|str>`: WireGuard client configuration file or string.

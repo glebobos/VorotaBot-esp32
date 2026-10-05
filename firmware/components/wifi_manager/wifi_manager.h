@@ -15,6 +15,7 @@ typedef enum {
 } wifi_mgr_mode_t;
 
 typedef struct {
+    bool ap_enabled;
     char ap_ssid[32];
     char ap_password[64];
     uint8_t ap_channel;
@@ -29,7 +30,9 @@ typedef struct {
 } wifi_mgr_config_t;
 
 /**
- * @brief Initialize Wi-Fi subsystem with SoftAP and optional Station support.
+ * @brief Initialize Wi-Fi subsystem.
+ * SoftAP is disabled by default if external Wi-Fi (STA) is configured,
+ * and will only be enabled if external Wi-Fi is not configured.
  * Loads configuration overrides from NVS if present.
  *
  * @param default_ssid Fallback SoftAP SSID.
@@ -57,6 +60,21 @@ esp_err_t wifi_manager_set_sta_credentials(const char *ssid, const char *passwor
  * @brief Disconnect STA and revert to AP-only mode.
  */
 esp_err_t wifi_manager_disable_sta(void);
+
+/**
+ * @brief Check if SoftAP is currently enabled.
+ */
+bool wifi_manager_is_ap_enabled(void);
+
+/**
+ * @brief Manually enable SoftAP.
+ */
+esp_err_t wifi_manager_enable_ap(void);
+
+/**
+ * @brief Manually disable SoftAP.
+ */
+esp_err_t wifi_manager_disable_ap(void);
 
 /**
  * @brief Get number of connected clients to SoftAP.

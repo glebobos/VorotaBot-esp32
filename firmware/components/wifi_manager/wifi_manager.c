@@ -91,6 +91,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             stop_sta_retry_timer();
             snprintf(s_config.sta_ip, sizeof(s_config.sta_ip), IPSTR, IP2STR(&event->ip_info.ip));
             ESP_LOGI(TAG, "STA connected successfully! IP address: %s", s_config.sta_ip);
+
+            // Once external Wi-Fi connects successfully, disable SoftAP if active
+            if (s_config.ap_enabled) {
+                ESP_LOGI(TAG, "External Wi-Fi connected and operational. Disabling SoftAP.");
+                s_config.ap_enabled = false;
+                esp_wifi_set_mode(WIFI_MODE_STA);
+            }
         }
     }
 }
@@ -132,7 +139,7 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
     esp_netif_set_ip_info(s_ap_netif, &ip_info);
     esp_netif_dhcps_start(s_ap_netif);
 
-    // Create STA netif if STA is enabled
+    // Create STA netif
     s_sta_netif = esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -141,22 +148,11 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
-    wifi_config_t wifi_ap_config = {
-        .ap = {
-            .channel = s_config.ap_channel,
-            .max_connection = s_config.ap_max_connections,
-            .authmode = (strlen(s_config.ap_password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN,
-            .ssid_hidden = s_config.ap_hidden ? 1 : 0,
-        },
-    };
-    strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
-    wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
-    strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
-
     if (s_config.sta_enabled) {
-        ESP_LOGI(TAG, "Initializing AP+STA mode (AP: '%s', STA: '%s')", s_config.ap_ssid, s_config.sta_ssid);
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config));
+        // External Wi-Fi is configured: disable SoftAP by default, enable STA only
+        s_config.ap_enabled = false;
+        ESP_LOGI(TAG, "External Wi-Fi configured (SSID: '%s'). SoftAP disabled by default, initializing STA mode.", s_config.sta_ssid);
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         
         wifi_config_t wifi_sta_config;
         memset(&wifi_sta_config, 0, sizeof(wifi_sta_config));
@@ -164,8 +160,22 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
         strncpy((char*)wifi_sta_config.sta.password, s_config.sta_password, sizeof(wifi_sta_config.sta.password));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_sta_config));
     } else {
-        ESP_LOGI(TAG, "Initializing SoftAP mode only (SSID: '%s')", s_config.ap_ssid);
+        // External Wi-Fi is not configured: enable SoftAP mode
+        s_config.ap_enabled = true;
+        ESP_LOGI(TAG, "External Wi-Fi not configured. Enabling SoftAP mode (SSID: '%s').", s_config.ap_ssid);
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+
+        wifi_config_t wifi_ap_config = {
+            .ap = {
+                .channel = s_config.ap_channel,
+                .max_connection = s_config.ap_max_connections,
+                .authmode = (strlen(s_config.ap_password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN,
+                .ssid_hidden = s_config.ap_hidden ? 1 : 0,
+            },
+        };
+        strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+        wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
+        strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config));
     }
 
@@ -203,15 +213,20 @@ esp_err_t wifi_manager_set_ap_credentials(const char *ssid, const char *password
         strncpy(s_config.ap_password, password, sizeof(s_config.ap_password) - 1);
     }
     
-    wifi_config_t wifi_ap_config;
-    esp_wifi_get_config(WIFI_IF_AP, &wifi_ap_config);
-    strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
-    wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
-    if (password) {
-        strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
-        wifi_ap_config.ap.authmode = (strlen(password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    if (s_config.ap_enabled) {
+        wifi_config_t wifi_ap_config;
+        esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &wifi_ap_config);
+        if (err == ESP_OK) {
+            strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+            wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
+            if (password) {
+                strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
+                wifi_ap_config.ap.authmode = (strlen(password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+            }
+            return esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+        }
     }
-    return esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+    return ESP_OK;
 }
 
 esp_err_t wifi_manager_set_sta_credentials(const char *ssid, const char *password) {
@@ -227,7 +242,13 @@ esp_err_t wifi_manager_set_sta_credentials(const char *ssid, const char *passwor
     strncpy(s_config.sta_password, password ? password : "", sizeof(s_config.sta_password) - 1);
     s_config.sta_enabled = true;
     
-    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (s_config.ap_enabled) {
+        // Keep SoftAP active in APSTA mode while attempting connection
+        // Once IP is obtained, AP will automatically be disabled.
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
+    } else {
+        esp_wifi_set_mode(WIFI_MODE_STA);
+    }
     
     wifi_config_t wifi_sta_config;
     memset(&wifi_sta_config, 0, sizeof(wifi_sta_config));
@@ -252,10 +273,65 @@ esp_err_t wifi_manager_disable_sta(void) {
     strcpy(s_config.sta_ip, "0.0.0.0");
     
     esp_wifi_disconnect();
-    return esp_wifi_set_mode(WIFI_MODE_AP);
+
+    // External Wi-Fi is no longer configured: enable SoftAP mode
+    ESP_LOGI(TAG, "External Wi-Fi disabled/erased. Enabling SoftAP mode (SSID: '%s').", s_config.ap_ssid);
+    s_config.ap_enabled = true;
+    esp_wifi_set_mode(WIFI_MODE_AP);
+
+    wifi_config_t wifi_ap_config = {
+        .ap = {
+            .channel = s_config.ap_channel,
+            .max_connection = s_config.ap_max_connections,
+            .authmode = (strlen(s_config.ap_password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN,
+            .ssid_hidden = s_config.ap_hidden ? 1 : 0,
+        },
+    };
+    strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+    wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
+    strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
+    return esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+}
+
+bool wifi_manager_is_ap_enabled(void) {
+    return s_config.ap_enabled;
+}
+
+esp_err_t wifi_manager_enable_ap(void) {
+    if (s_config.ap_enabled) return ESP_OK;
+
+    s_config.ap_enabled = true;
+    wifi_mode_t target_mode = s_config.sta_enabled ? WIFI_MODE_APSTA : WIFI_MODE_AP;
+    esp_err_t err = esp_wifi_set_mode(target_mode);
+    if (err != ESP_OK) return err;
+
+    wifi_config_t wifi_ap_config = {
+        .ap = {
+            .channel = s_config.ap_channel,
+            .max_connection = s_config.ap_max_connections,
+            .authmode = (strlen(s_config.ap_password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN,
+            .ssid_hidden = s_config.ap_hidden ? 1 : 0,
+        },
+    };
+    strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+    wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
+    strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
+    return esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+}
+
+esp_err_t wifi_manager_disable_ap(void) {
+    if (!s_config.ap_enabled) return ESP_OK;
+
+    s_config.ap_enabled = false;
+    if (s_config.sta_enabled) {
+        return esp_wifi_set_mode(WIFI_MODE_STA);
+    } else {
+        return esp_wifi_set_mode(WIFI_MODE_NULL);
+    }
 }
 
 int wifi_manager_get_ap_client_count(void) {
+    if (!s_config.ap_enabled) return 0;
     wifi_sta_list_t sta_list;
     if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
         return sta_list.num;

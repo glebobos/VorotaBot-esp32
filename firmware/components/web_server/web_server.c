@@ -444,6 +444,15 @@ static esp_err_t api_system_info_handler(httpd_req_t *req) {
     aws_route53_status_t r53_st;
     aws_route53_get_status(&r53_st);
 
+    const char *wifi_mode_str = "OFF";
+    if (wifi_cfg.ap_enabled && wifi_cfg.sta_enabled) {
+        wifi_mode_str = "AP+STA";
+    } else if (wifi_cfg.ap_enabled) {
+        wifi_mode_str = "AP_ONLY";
+    } else if (wifi_cfg.sta_enabled) {
+        wifi_mode_str = "STA_ONLY";
+    }
+
     char json[1024];
     snprintf(json, sizeof(json),
         "{"
@@ -456,6 +465,7 @@ static esp_err_t api_system_info_handler(httpd_req_t *req) {
         "\"uptime_s\":%lld,"
         "\"wifi\":{"
           "\"mode\":\"%s\","
+          "\"ap_enabled\":%s,"
           "\"sta_connected\":%s,"
           "\"sta_ssid\":\"%s\","
           "\"sta_ip\":\"%s\","
@@ -486,7 +496,8 @@ static esp_err_t api_system_info_handler(httpd_req_t *req) {
         (unsigned long)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
         (unsigned long)esp_get_free_heap_size(),
         (long long)(esp_timer_get_time() / 1000000),
-        wifi_cfg.sta_enabled ? "AP+STA" : "AP_ONLY",
+        wifi_mode_str,
+        wifi_cfg.ap_enabled ? "true" : "false",
         wifi_cfg.sta_connected ? "true" : "false",
         wifi_cfg.sta_ssid,
         wifi_cfg.sta_ip,

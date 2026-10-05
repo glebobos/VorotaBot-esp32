@@ -41,6 +41,11 @@ static void wifi_ip_event_handler(void* arg, esp_event_base_t event_base,
         snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Wi-Fi Station connected with IP: %s", ip_str);
 
+        // Stop captive portal DNS server once connected to external Wi-Fi
+        if (dns_server_is_running()) {
+            dns_server_stop();
+        }
+
         // Notify WireGuard manager that Internet connectivity is ready
         wireguard_manager_on_wifi_connected();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -78,11 +83,13 @@ void app_main(void) {
     // 6. Initialize OTA Manager
     ESP_ERROR_CHECK(ota_manager_init());
 
-    // 7. Start Wi-Fi Subsystem (SoftAP + STA fallback)
+    // 7. Start Wi-Fi Subsystem (SoftAP enabled only if external Wi-Fi is not configured)
     ESP_ERROR_CHECK(wifi_manager_init(CONFIG_VOROTABOT_WIFI_SSID, CONFIG_VOROTABOT_WIFI_PASSWORD));
 
-    // 8. Start Captive Portal DNS Server (UDP Port 53)
-    ESP_ERROR_CHECK(dns_server_start());
+    // 8. Start Captive Portal DNS Server (UDP Port 53) only if SoftAP is enabled
+    if (wifi_manager_is_ap_enabled()) {
+        ESP_ERROR_CHECK(dns_server_start());
+    }
 
     // 9. Start HTTP Web Server (Port 80)
     web_server_config_t ws_cfg = {
@@ -94,8 +101,16 @@ void app_main(void) {
     // 10. System Ready Banner
     ESP_LOGI(TAG, "=================================================");
     ESP_LOGI(TAG, "  VOROTABOT READY & ONLINE");
-    ESP_LOGI(TAG, "  SoftAP SSID:   %s", CONFIG_VOROTABOT_WIFI_SSID);
-    ESP_LOGI(TAG, "  Local Web URL: http://192.168.4.1/");
-    ESP_LOGI(TAG, "  Local Domain:  http://%s/", CONFIG_VOROTABOT_PORTAL_DOMAIN);
+    if (wifi_manager_is_ap_enabled()) {
+        ESP_LOGI(TAG, "  SoftAP Status: ENABLED (External Wi-Fi not configured)");
+        ESP_LOGI(TAG, "  SoftAP SSID:   %s", CONFIG_VOROTABOT_WIFI_SSID);
+        ESP_LOGI(TAG, "  Local Web URL: http://192.168.4.1/");
+        ESP_LOGI(TAG, "  Local Domain:  http://%s/", CONFIG_VOROTABOT_PORTAL_DOMAIN);
+    } else {
+        wifi_mgr_config_t w_cfg;
+        wifi_manager_get_config(&w_cfg);
+        ESP_LOGI(TAG, "  SoftAP Status: DISABLED (Default - External Wi-Fi configured)");
+        ESP_LOGI(TAG, "  Target SSID:   %s", w_cfg.sta_ssid);
+    }
     ESP_LOGI(TAG, "=================================================");
 }

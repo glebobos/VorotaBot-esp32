@@ -113,9 +113,9 @@ The second RDC1-2R module connects directly to the button pads of the Nice remot
 ## 🌐 Connectivity & Networking
 
 ### 1. Wi-Fi & Captive Portal
-* Connects to home Wi-Fi in Station (STA) mode.
-* Falls back to SoftAP captive portal (`VorotaBot-AP`, password: `12345678`) if disconnected.
-* Local portal accessible at `http://192.168.4.1/` or `http://vorota.local/`.
+* Connects to external Wi-Fi in Station (STA) mode.
+* SoftAP is disabled by default and enabled only if external Wi-Fi is not configured (e.g. initial setup or after factory reset).
+* When SoftAP is enabled, captive portal (`VorotaBot-AP`, password: `12345678`) is accessible at `http://192.168.4.1/` or `http://vorota.local/`.
 
 ### 2. WireGuard VPN Client
 * Embedded client connects directly to your AWS WireGuard server (e.g. BelKeeper VPN).

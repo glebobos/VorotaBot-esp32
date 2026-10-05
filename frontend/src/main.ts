@@ -11,6 +11,7 @@ interface SystemInfo {
   uptime_s: number;
   wifi: {
     mode: string;
+    ap_enabled?: boolean;
     sta_connected: boolean;
     sta_ssid: string;
     sta_ip: string;
@@ -504,8 +505,16 @@ class VorotaBotApp {
       // Wi-Fi
       const wifiIp = document.getElementById('net-wifi-ip');
       const wifiSsid = document.getElementById('net-wifi-ssid');
-      if (wifiIp) wifiIp.innerText = info.wifi.sta_connected ? info.wifi.sta_ip : '192.168.4.1';
-      if (wifiSsid) wifiSsid.innerText = info.wifi.sta_connected ? info.wifi.sta_ssid : 'VorotaBot-AP';
+      if (wifiIp) {
+        wifiIp.innerText = info.wifi.sta_connected
+          ? info.wifi.sta_ip
+          : (info.wifi.ap_enabled ? '192.168.4.1' : '--');
+      }
+      if (wifiSsid) {
+        wifiSsid.innerText = info.wifi.sta_connected
+          ? info.wifi.sta_ssid
+          : (info.wifi.ap_enabled ? 'VorotaBot-AP' : (info.wifi.sta_ssid || 'Disabled'));
+      }
 
       // Diagnostics
       const freeHeap = document.getElementById('val-free-heap');

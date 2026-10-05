@@ -258,7 +258,10 @@ case "$CMD" in
   build-frontend)
     log_info "Building frontend assets with Vite..."
     run_cmd docker compose run --rm frontend-builder
-    log_success "Frontend assets compiled and gzipped to firmware/spiffs_image/."
+    if [ -f "firmware/spiffs_image/index.html.gz" ]; then
+      cp firmware/spiffs_image/index.html.gz firmware/components/web_server/index.html.gz
+    fi
+    log_success "Frontend assets compiled, gzipped, and synced to web_server component."
     ;;
     
   build-firmware)
@@ -270,9 +273,13 @@ case "$CMD" in
   build)
     log_info "Starting full end-to-end project build..."
     run_cmd docker compose run --rm frontend-builder
+    if [ -f "firmware/spiffs_image/index.html.gz" ]; then
+      cp firmware/spiffs_image/index.html.gz firmware/components/web_server/index.html.gz
+    fi
     run_cmd docker compose run --rm firmware-builder
     log_success "Full project build completed successfully."
     ;;
+
 
   provision)
     generate_provision_bin
@@ -340,17 +347,21 @@ case "$CMD" in
 
   build-ota)
     log_info "Building OTA-ready binary..."
-    run_cmd docker compose up --build frontend-builder
-    run_cmd docker compose up --build firmware-builder
+    run_cmd docker compose run --rm frontend-builder
+    if [ -f "firmware/spiffs_image/index.html.gz" ]; then
+      cp firmware/spiffs_image/index.html.gz firmware/components/web_server/index.html.gz
+    fi
+    run_cmd docker compose run --rm firmware-builder
     mkdir -p dist
     if [ -f "firmware/build/vorotabot_esp32.bin" ]; then
       cp firmware/build/vorotabot_esp32.bin dist/firmware-update.bin
-      log_success "OTA binary generated: dist/firmware-update.bin"
+      log_success "OTA binary generated: dist/firmware-update.bin (Web UI embedded)"
       log_info "Upload this file via the Web Portal OTA flasher tab (http://192.168.4.1/)."
     else
       log_error "Could not find firmware/build/vorotabot_esp32.bin."
     fi
     ;;
+
     
   size)
     log_info "Analyzing firmware binary size & memory allocation..."

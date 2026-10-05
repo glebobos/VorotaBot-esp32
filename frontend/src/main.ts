@@ -35,6 +35,16 @@ interface SystemInfo {
     last_action: string;
   };
   ota_partition?: string;
+  auth?: {
+    is_wireguard: boolean;
+    password_configured: boolean;
+  };
+}
+
+interface AuthStatus {
+  is_wireguard: boolean;
+  password_configured: boolean;
+  authenticated: boolean;
 }
 
 interface GateStatus {
@@ -63,13 +73,17 @@ class VorotaBotApp {
   private sysPollTimer: number | null = null;
   private gatePollTimer: number | null = null;
   private busy: Record<string, boolean> = {};
+  private isWireGuard = false;
+  private passwordConfigured = false;
 
   constructor() {
     this.initGateActions();
     this.initModalControls();
     this.initSettingsTabs();
     this.initSettingsActions();
+    this.initAuthListeners();
     this.initOtaFlasher();
+    this.checkAuthStatus();
     this.fetchSystemInfo();
     this.fetchGateStatus();
 
@@ -179,9 +193,19 @@ class VorotaBotApp {
     try {
       const res = await fetch(`/api/gate/${target}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getHeaders()
+        },
         body: JSON.stringify({ action })
       });
+
+      if (res.status === 401) {
+        if (feedback) feedback.innerText = 'Auth Required';
+        this.showActivity(`${displayName}: Authentication Required`);
+        this.showAuthModal();
+        return;
+      }
 
       if (res.ok) {
         if (feedback) feedback.innerText = 'Sent';
@@ -224,7 +248,11 @@ class VorotaBotApp {
    * ------------------------------------------------------------- */
   private async fetchGateStatus(): Promise<void> {
     try {
-      const res = await fetch('/api/gate/status');
+      const res = await fetch('/api/gate/status', { headers: this.getHeaders() });
+      if (res.status === 401) {
+        this.showAuthModal();
+        return;
+      }
       if (!res.ok) {
         this.setOnlineStatus(false);
         return;
@@ -377,7 +405,10 @@ class VorotaBotApp {
       try {
         const res = await fetch('/api/wireguard/config', {
           method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: {
+            'Content-Type': 'text/plain',
+            ...this.getHeaders()
+          },
           body: conf
         });
         if (res.ok) {
@@ -395,7 +426,10 @@ class VorotaBotApp {
     // Route 53 Force Sync
     document.getElementById('btn-r53-force-sync')?.addEventListener('click', async () => {
       try {
-        const res = await fetch('/api/route53/sync', { method: 'POST' });
+        const res = await fetch('/api/route53/sync', {
+          method: 'POST',
+          headers: this.getHeaders()
+        });
         if (res.ok) {
           alert('Route 53 DNS sync initiated!');
           this.fetchSystemInfo();
@@ -425,6 +459,64 @@ class VorotaBotApp {
         this.fetchSystemInfo();
       } catch (err: any) {
         alert('Wi-Fi connection error: ' + err.message);
+      }
+    });
+
+    // SoftAP Hotspot Toggle
+    const apSwitch = document.getElementById('toggle-ap-switch') as HTMLInputElement | null;
+    apSwitch?.addEventListener('change', async () => {
+      const enabled = apSwitch.checked;
+      try {
+        await this.postJson('/api/wifi/ap', { enabled });
+        this.fetchSystemInfo();
+      } catch (err: any) {
+        alert('Failed to update SoftAP state: ' + err.message);
+        apSwitch.checked = !enabled;
+      }
+    });
+
+    // Save Web Password
+    document.getElementById('btn-save-web-pass')?.addEventListener('click', async () => {
+      const currInput = document.getElementById('input-curr-web-pass') as HTMLInputElement | null;
+      const newInput = document.getElementById('input-new-web-pass') as HTMLInputElement | null;
+      const current_password = currInput?.value.trim() || '';
+      const new_password = newInput?.value.trim() || '';
+
+      if (this.passwordConfigured && !this.isWireGuard && !current_password) {
+        alert('Please enter your current password');
+        return;
+      }
+
+      try {
+        const res = await this.postJson('/api/auth/password', { current_password, new_password });
+        if (res.token) {
+          localStorage.setItem('vorota_auth_token', res.token);
+        }
+        alert(new_password ? 'Web password saved!' : 'Web password removed.');
+        if (currInput) currInput.value = '';
+        if (newInput) newInput.value = '';
+        await this.checkAuthStatus();
+      } catch (err: any) {
+        alert('Failed to update password: ' + err.message);
+      }
+    });
+
+    // Remove Web Password
+    document.getElementById('btn-remove-web-pass')?.addEventListener('click', async () => {
+      if (!confirm('Remove web password protection for local Wi-Fi?')) return;
+      const currInput = document.getElementById('input-curr-web-pass') as HTMLInputElement | null;
+      const current_password = currInput?.value.trim() || '';
+
+      try {
+        const res = await this.postJson('/api/auth/password', { current_password, new_password: '' });
+        if (res.token) {
+          localStorage.setItem('vorota_auth_token', res.token);
+        }
+        alert('Password removed. Web dashboard is now open on local Wi-Fi.');
+        if (currInput) currInput.value = '';
+        await this.checkAuthStatus();
+      } catch (err: any) {
+        alert('Failed to remove password: ' + err.message);
       }
     });
 
@@ -460,7 +552,11 @@ class VorotaBotApp {
    * ------------------------------------------------------------- */
   private async fetchSystemInfo(): Promise<void> {
     try {
-      const res = await fetch('/api/system/info');
+      const res = await fetch('/api/system/info', { headers: this.getHeaders() });
+      if (res.status === 401) {
+        this.showAuthModal();
+        return;
+      }
       if (!res.ok) {
         this.setOnlineStatus(false);
         return;
@@ -514,6 +610,19 @@ class VorotaBotApp {
         wifiSsid.innerText = info.wifi.sta_connected
           ? info.wifi.sta_ssid
           : (info.wifi.ap_enabled ? 'VorotaBot-AP' : (info.wifi.sta_ssid || 'Disabled'));
+      }
+
+      // SoftAP switch sync
+      const apSwitch = document.getElementById('toggle-ap-switch') as HTMLInputElement | null;
+      if (apSwitch && document.activeElement !== apSwitch) {
+        apSwitch.checked = Boolean(info.wifi?.ap_enabled);
+      }
+
+      // Auth state sync
+      if (info.auth) {
+        this.isWireGuard = info.auth.is_wireguard;
+        this.passwordConfigured = info.auth.password_configured;
+        this.updateAuthUi();
       }
 
       // Diagnostics
@@ -583,6 +692,10 @@ class VorotaBotApp {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/system/ota', true);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    const token = localStorage.getItem('vorota_auth_token');
+    if (token) {
+      xhr.setRequestHeader('X-Auth-Token', token);
+    }
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
@@ -608,12 +721,153 @@ class VorotaBotApp {
     xhr.send(file);
   }
 
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    const token = localStorage.getItem('vorota_auth_token');
+    if (token) {
+      headers['X-Auth-Token'] = token;
+    }
+    return headers;
+  }
+
+  private async checkAuthStatus(): Promise<void> {
+    try {
+      const res = await fetch('/api/auth/status', { headers: this.getHeaders() });
+      if (res.ok) {
+        const data: AuthStatus = await res.json();
+        this.isWireGuard = data.is_wireguard;
+        this.passwordConfigured = data.password_configured;
+        this.updateAuthUi();
+
+        if (!data.is_wireguard && data.password_configured && !data.authenticated) {
+          this.showAuthModal();
+        } else {
+          this.hideAuthModal();
+        }
+      }
+    } catch (err) {
+      console.warn('Auth status check error:', err);
+    }
+  }
+
+  private showAuthModal(): void {
+    const backdrop = document.getElementById('auth-backdrop');
+    if (backdrop?.classList.contains('open')) {
+      return; // Modal is already open, do not clear user typing!
+    }
+    backdrop?.classList.add('open');
+    const input = document.getElementById('input-login-pass') as HTMLInputElement | null;
+    if (input) {
+      input.value = '';
+      setTimeout(() => input.focus(), 150);
+    }
+    const errEl = document.getElementById('login-error-msg');
+    if (errEl) errEl.style.display = 'none';
+  }
+
+  private hideAuthModal(): void {
+    const backdrop = document.getElementById('auth-backdrop');
+    if (backdrop) backdrop.classList.remove('open');
+    const errEl = document.getElementById('login-error-msg');
+    if (errEl) errEl.style.display = 'none';
+  }
+
+
+  private updateAuthUi(): void {
+    const badge = document.getElementById('badge-auth-status');
+    const notice = document.getElementById('auth-wg-notice');
+    const groupCurrent = document.getElementById('group-current-pass');
+    const btnRemove = document.getElementById('btn-remove-web-pass');
+
+    if (notice) {
+      notice.style.display = this.isWireGuard ? 'block' : 'none';
+    }
+
+    if (this.passwordConfigured) {
+      if (badge) {
+        badge.innerText = 'Protected';
+        badge.className = 'info-val badge text-emerald';
+      }
+      if (groupCurrent) {
+        groupCurrent.style.display = this.isWireGuard ? 'none' : 'block';
+      }
+      if (btnRemove) btnRemove.style.display = 'inline-block';
+    } else {
+      if (badge) {
+        badge.innerText = 'Open';
+        badge.className = 'info-val badge';
+      }
+      if (groupCurrent) groupCurrent.style.display = 'none';
+      if (btnRemove) btnRemove.style.display = 'none';
+    }
+  }
+
+  private initAuthListeners(): void {
+    const submitLogin = async () => {
+      const passInput = document.getElementById('input-login-pass') as HTMLInputElement | null;
+      const errEl = document.getElementById('login-error-msg');
+      const password = passInput?.value.trim() || '';
+
+      if (!password) {
+        if (errEl) {
+          errEl.innerText = 'Please enter password';
+          errEl.style.display = 'block';
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.token) {
+            localStorage.setItem('vorota_auth_token', data.token);
+          }
+          this.hideAuthModal();
+          await this.checkAuthStatus();
+          this.fetchSystemInfo();
+          this.fetchGateStatus();
+        } else {
+          if (errEl) {
+            errEl.innerText = 'Incorrect password';
+            errEl.style.display = 'block';
+          }
+          if (passInput) passInput.select();
+        }
+      } catch (err: any) {
+        if (errEl) {
+          errEl.innerText = 'Login error: ' + err.message;
+          errEl.style.display = 'block';
+        }
+      }
+    };
+
+    document.getElementById('btn-submit-login')?.addEventListener('click', submitLogin);
+    document.getElementById('input-login-pass')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitLogin();
+    });
+  }
+
   private async postJson(url: string, data: any): Promise<any> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const token = localStorage.getItem('vorota_auth_token');
+    if (token) {
+      headers['X-Auth-Token'] = token;
+    }
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(data)
     });
+    if (res.status === 401) {
+      this.showAuthModal();
+      throw new Error('Authentication required');
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || `HTTP ${res.status}`);

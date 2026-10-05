@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="theme-color" content="#ebf0f5" />
   <title>VorotaBot • Gate Controller</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'%3E%3Crect width='64' height='64' rx='16' fill='%230f172a'/%3E%3Cpath d='M16 32h8l4-12 8 24 6-16 4 8h12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%2338bdf8'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -253,6 +253,42 @@
               <input type="password" id="wifi-sta-password" class="form-control" placeholder="Wi-Fi Password" />
             </div>
             <button class="btn btn-primary btn-sm btn-block" id="btn-connect-wifi">Connect to Wi-Fi</button>
+
+            <div class="card-title-row mt-3 pt-3" style="border-top: 1px solid rgba(0,0,0,0.06);">
+              <div class="card-icon-title">
+                <span class="card-title" style="font-size: 0.85rem;">SoftAP Hotspot</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggle-ap-switch" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <p class="text-xs text-muted mt-1">Manual broadcast for local setup. Disabled by default when external Wi-Fi is active.</p>
+          </div>
+
+          <!-- Web Access Security Card -->
+          <div class="settings-card">
+            <div class="card-title-row">
+              <div class="card-icon-title">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--pastel-blue)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                <span class="card-title">Web Security</span>
+              </div>
+              <span class="info-val badge" id="badge-auth-status">Open</span>
+            </div>
+            <p class="text-xs text-muted mb-2">Password required when accessing dashboard via local Wi-Fi. WireGuard connections are cryptographically authenticated and automatically bypass this.</p>
+            <div id="auth-wg-notice" class="badge text-cyan mb-2" style="display: none; width: 100%; text-align: left; padding: 6px 10px; font-size: 0.75rem;">
+              ⚡ Connected via WireGuard: Password Bypassed
+            </div>
+            <div class="form-group" id="group-current-pass" style="display: none;">
+              <input type="password" id="input-curr-web-pass" class="form-control text-xs" placeholder="Current Password" />
+            </div>
+            <div class="form-group">
+              <input type="password" id="input-new-web-pass" class="form-control text-xs" placeholder="New Password (leave blank to clear)" />
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-secondary btn-sm" id="btn-save-web-pass">Update Password</button>
+              <button class="btn btn-danger btn-sm" id="btn-remove-web-pass" style="display: none;">Remove</button>
+            </div>
           </div>
         </div>
 
@@ -346,6 +382,24 @@
             </div>
           </div>
         </div>
+    <!-- Login Password Modal for Local Wi-Fi -->
+    <div class="modal-backdrop" id="auth-backdrop">
+      <div class="modal-sheet" id="auth-sheet" style="border-radius: var(--radius-xl); margin: auto; padding: 24px; max-width: 360px;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <div style="width: 56px; height: 56px; border-radius: 50%; background: var(--bg-surface); box-shadow: var(--neu-card-shadow); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px; color: var(--pastel-blue);">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+          </div>
+          <h2 class="modal-title">VorotaBot</h2>
+          <p class="modal-subtitle mt-1">Local Wi-Fi authentication required</p>
+        </div>
+        <div class="form-group">
+          <input type="password" id="input-login-pass" class="form-control text-center" style="font-size: 1.1rem; letter-spacing: 2px;" placeholder="Enter Password" autocomplete="current-password" />
+          <div id="login-error-msg" class="text-danger text-xs text-center mt-2" style="display: none; font-weight: 500;"></div>
+        </div>
+        <button class="btn btn-primary btn-block mt-3" id="btn-submit-login">Unlock Dashboard</button>
       </div>
     </div>
   </div>

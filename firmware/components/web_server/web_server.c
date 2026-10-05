@@ -5,17 +5,22 @@
 #include "gate_controller.h"
 #include "wireguard_manager.h"
 #include "aws_route53.h"
+#include "dns_server.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_chip_info.h"
 #include "esp_spiffs.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -57,6 +62,19 @@ static bool is_captive_probe(const char *uri) {
             strcmp(uri, "/redirect") == 0);
 }
 
+/* Embedded Web Assets */
+extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_gz_end[]   asm("_binary_index_html_gz_end");
+
+static esp_err_t serve_embedded_index_html(httpd_req_t *req) {
+    size_t len = index_html_gz_end - index_html_gz_start;
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
+    return httpd_resp_send(req, (const char *)index_html_gz_start, len);
+}
+
 /* SPIFFS File Server with transparent GZIP support */
 static esp_err_t serve_spiffs_file(httpd_req_t *req, const char *filepath) {
     char gz_filepath[160];
@@ -70,9 +88,9 @@ static esp_err_t serve_spiffs_file(httpd_req_t *req, const char *filepath) {
         is_gz = true;
         final_path = gz_filepath;
     } else if (stat(filepath, &st) != 0) {
-        // Fallback to index.html for SPA client routes
+        // Fallback to embedded index.html for SPA client routes
         if (strstr(filepath, "/assets/") == NULL && strcmp(filepath, "/spiffs/favicon.ico") != 0) {
-            return serve_spiffs_file(req, "/spiffs/index.html");
+            return serve_embedded_index_html(req);
         }
         httpd_resp_send_404(req);
         return ESP_FAIL;
@@ -123,8 +141,17 @@ static esp_err_t spiffs_catch_all_handler(httpd_req_t *req) {
         return captive_redirect(req);
     }
 
-    if (strcmp(req->uri, "/favicon.ico") == 0) {
-        return serve_spiffs_file(req, "/spiffs/favicon.ico");
+    if (strcmp(req->uri, "/favicon.ico") == 0 || strcmp(req->uri, "/favicon.svg") == 0) {
+        if (serve_spiffs_file(req, "/spiffs/favicon.svg") == ESP_OK) {
+            return ESP_OK;
+        }
+        httpd_resp_set_status(req, "204 No Content");
+        return httpd_resp_send(req, NULL, 0);
+    }
+
+    // Always serve latest embedded single-page dashboard for root and client routes
+    if (strcmp(req->uri, "/") == 0 || strstr(req->uri, "/assets/") == NULL) {
+        return serve_embedded_index_html(req);
     }
 
     char filepath[160];
@@ -134,13 +161,12 @@ static esp_err_t spiffs_catch_all_handler(httpd_req_t *req) {
         path_len = sizeof(filepath) - 9;
     }
 
-    if (strcmp(req->uri, "/") == 0) {
-        snprintf(filepath, sizeof(filepath), "/spiffs/index.html");
-    } else {
-        snprintf(filepath, sizeof(filepath), "/spiffs%.*s", (int)path_len, req->uri);
+    snprintf(filepath, sizeof(filepath), "/spiffs%.*s", (int)path_len, req->uri);
+    esp_err_t ret = serve_spiffs_file(req, filepath);
+    if (ret != ESP_OK) {
+        return serve_embedded_index_html(req);
     }
-
-    return serve_spiffs_file(req, filepath);
+    return ret;
 }
 
 /* Helper to read body buffer */
@@ -158,11 +184,284 @@ static char* read_request_body(httpd_req_t *req) {
 }
 
 /* =========================================================================
+ * Access Control & Web Authentication
+ * ========================================================================= */
+
+static char s_web_password[64] = {0};
+static char s_session_token[40] = {0};
+static bool s_auth_initialized = false;
+
+static void init_web_auth(void) {
+    if (s_auth_initialized) return;
+    nvs_manager_get_str("web_pass", s_web_password, sizeof(s_web_password), "");
+
+    uint8_t rand_bytes[16];
+    esp_fill_random(rand_bytes, sizeof(rand_bytes));
+    for (int i = 0; i < 16; i++) {
+        sprintf(&s_session_token[i * 2], "%02x", rand_bytes[i]);
+    }
+    s_session_token[32] = '\0';
+    s_auth_initialized = true;
+}
+
+static bool is_wireguard_request(httpd_req_t *req) {
+    // 1. Check HTTP Host header (e.g. vorota.glebos.click, *.click, or WireGuard 10.x.x.x IP)
+    char host[128] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK) {
+        if (strstr(host, "vorota.") != NULL ||
+            strstr(host, "glebos.click") != NULL ||
+            strncmp(host, "10.", 3) == 0) {
+            return true;
+        }
+    }
+
+    // 2. Inspect socket local address (destination IP) and peer address (source IP)
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd >= 0) {
+        // Destination address on ESP32
+        struct sockaddr_in local_addr;
+        socklen_t addr_len = sizeof(local_addr);
+        if (getsockname(sockfd, (struct sockaddr *)&local_addr, &addr_len) == 0) {
+            char local_ip[32] = {0};
+            inet_ntop(AF_INET, &local_addr.sin_addr, local_ip, sizeof(local_ip));
+            if (strncmp(local_ip, "10.", 3) == 0) {
+                return true;
+            }
+        }
+
+        // Source address of the client
+        struct sockaddr_in peer_addr;
+        socklen_t peer_len = sizeof(peer_addr);
+        if (getpeername(sockfd, (struct sockaddr *)&peer_addr, &peer_len) == 0) {
+            char peer_ip[32] = {0};
+            inet_ntop(AF_INET, &peer_addr.sin_addr, peer_ip, sizeof(peer_ip));
+            if (strncmp(peer_ip, "10.", 3) == 0) {
+                return true;
+            }
+        }
+    }
+
+    // 3. Fallback: check if host matches assigned wireguard IP
+    wireguard_status_t wg_st;
+    wireguard_manager_get_status(&wg_st);
+    if (strlen(wg_st.assigned_ip) > 0 && host[0] != '\0') {
+        if (strstr(host, wg_st.assigned_ip) != NULL) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+static bool is_authenticated(httpd_req_t *req) {
+    init_web_auth();
+
+    // WireGuard connection is cryptographically trusted and automatically bypasses authentication
+    if (is_wireguard_request(req)) {
+        return true;
+    }
+
+    // If no password is set in NVS, access is open
+    if (strlen(s_web_password) == 0) {
+        return true;
+    }
+
+    // Check X-Auth-Token header
+    char token_hdr[64] = {0};
+    if (httpd_req_get_hdr_value_str(req, "X-Auth-Token", token_hdr, sizeof(token_hdr)) == ESP_OK) {
+        if (strlen(s_session_token) > 0 && strcmp(token_hdr, s_session_token) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool check_auth_or_reject(httpd_req_t *req) {
+    if (!is_authenticated(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Unauthorized\"}");
+        return false;
+    }
+    return true;
+}
+
+/* GET /api/auth/status */
+static esp_err_t api_auth_status_handler(httpd_req_t *req) {
+    init_web_auth();
+    bool is_wg = is_wireguard_request(req);
+    bool pass_set = (strlen(s_web_password) > 0);
+    bool auth = is_authenticated(req);
+
+    char json[256];
+    snprintf(json, sizeof(json),
+        "{\"is_wireguard\":%s,\"password_configured\":%s,\"authenticated\":%s}",
+        is_wg ? "true" : "false",
+        pass_set ? "true" : "false",
+        auth ? "true" : "false"
+    );
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+/* POST /api/auth/login */
+static esp_err_t api_auth_login_handler(httpd_req_t *req) {
+    init_web_auth();
+    char *body = read_request_body(req);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing request body");
+        return ESP_FAIL;
+    }
+
+    char pass[65] = {0};
+    char *p = strstr(body, "\"password\":\"");
+    if (p) {
+        char *end = strchr(p + 12, '\"');
+        if (end) {
+            size_t len = MIN((size_t)(end - (p + 12)), sizeof(pass) - 1);
+            strncpy(pass, p + 12, len);
+        }
+    }
+    free(body);
+
+    httpd_resp_set_type(req, "application/json");
+
+    if (strlen(s_web_password) == 0 || strcmp(pass, s_web_password) == 0) {
+        char resp[128];
+        snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"token\":\"%s\"}", s_session_token);
+        httpd_resp_sendstr(req, resp);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Invalid password\"}");
+        return ESP_OK;
+    }
+}
+
+/* POST /api/auth/password */
+static esp_err_t api_auth_password_handler(httpd_req_t *req) {
+    init_web_auth();
+    if (!is_authenticated(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Unauthorized\"}");
+        return ESP_OK;
+    }
+
+    char *body = read_request_body(req);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing request body");
+        return ESP_FAIL;
+    }
+
+    char current_pass[65] = {0};
+    char new_pass[65] = {0};
+
+    char *c = strstr(body, "\"current_password\":\"");
+    if (c) {
+        char *end = strchr(c + 20, '\"');
+        if (end) {
+            size_t len = MIN((size_t)(end - (c + 20)), sizeof(current_pass) - 1);
+            strncpy(current_pass, c + 20, len);
+        }
+    }
+
+    char *n = strstr(body, "\"new_password\":\"");
+    if (n) {
+        char *end = strchr(n + 16, '\"');
+        if (end) {
+            size_t len = MIN((size_t)(end - (n + 16)), sizeof(new_pass) - 1);
+            strncpy(new_pass, n + 16, len);
+        }
+    }
+    free(body);
+
+    bool is_wg = is_wireguard_request(req);
+
+    // If password is currently set and request is not via WireGuard, verify current password
+    if (strlen(s_web_password) > 0 && !is_wg) {
+        if (strcmp(current_pass, s_web_password) != 0) {
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Current password is incorrect\"}");
+            return ESP_OK;
+        }
+    }
+
+    // Save or erase new password
+    if (strlen(new_pass) > 0) {
+        nvs_manager_set_str("web_pass", new_pass);
+        snprintf(s_web_password, sizeof(s_web_password), "%s", new_pass);
+        ESP_LOGI(TAG, "Web access password updated");
+    } else {
+        nvs_manager_erase_key("web_pass");
+        s_web_password[0] = '\0';
+        ESP_LOGI(TAG, "Web access password cleared (open access)");
+    }
+
+    // Rotate session token
+    uint8_t rand_bytes[16];
+    esp_fill_random(rand_bytes, sizeof(rand_bytes));
+    for (int i = 0; i < 16; i++) {
+        sprintf(&s_session_token[i * 2], "%02x", rand_bytes[i]);
+    }
+    s_session_token[32] = '\0';
+
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"token\":\"%s\"}", s_session_token);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+/* POST /api/wifi/ap */
+static esp_err_t api_wifi_ap_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
+    char *body = read_request_body(req);
+    bool enable = true;
+    if (body) {
+        if (strstr(body, "\"enabled\":false") || strstr(body, "\"enabled\": false") || strstr(body, "false")) {
+            enable = false;
+        }
+        free(body);
+    }
+
+    esp_err_t err;
+    if (enable) {
+        err = wifi_manager_enable_ap();
+        if (err == ESP_OK) {
+            dns_server_start();
+        }
+    } else {
+        err = wifi_manager_disable_ap();
+        if (err == ESP_OK) {
+            dns_server_stop();
+        }
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    if (err == ESP_OK) {
+        httpd_resp_sendstr(req, enable ? "{\"status\":\"ok\",\"ap\":\"enabled\"}" : "{\"status\":\"ok\",\"ap\":\"disabled\"}");
+    } else {
+        httpd_resp_set_status(req, "500 Internal Error");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Failed to change AP state\"}");
+    }
+    return ESP_OK;
+}
+
+/* =========================================================================
  * REST API: Gate Control
  * ========================================================================= */
 
 /* POST /api/gate/garage */
 static esp_err_t api_gate_garage_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     char *body = read_request_body(req);
     garage_action_t action = GARAGE_ACTION_FULL;
 
@@ -204,6 +503,8 @@ static esp_err_t api_gate_garage_handler(httpd_req_t *req) {
 
 /* POST /api/gate/driveway */
 static esp_err_t api_gate_driveway_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     char *body = read_request_body(req);
     driveway_action_t action = DRIVEWAY_ACTION_OPEN;
 
@@ -245,6 +546,8 @@ static esp_err_t api_gate_driveway_handler(httpd_req_t *req) {
 
 /* GET /api/gate/status */
 static esp_err_t api_gate_status_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     gate_status_t st;
     gate_controller_get_status(&st);
 
@@ -275,6 +578,8 @@ static esp_err_t api_gate_status_handler(httpd_req_t *req) {
 
 /* POST /api/gate/settings */
 static esp_err_t api_gate_settings_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     char *body = read_request_body(req);
     if (!body) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Body required");
@@ -311,6 +616,8 @@ static esp_err_t api_gate_settings_handler(httpd_req_t *req) {
 
 /* POST /api/wireguard/toggle */
 static esp_err_t api_wireguard_toggle_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     char *body = read_request_body(req);
     bool enable = true;
     if (body) {
@@ -329,6 +636,8 @@ static esp_err_t api_wireguard_toggle_handler(httpd_req_t *req) {
 
 /* POST /api/wireguard/config */
 static esp_err_t api_wireguard_config_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     char *body = read_request_body(req);
     if (!body) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Configuration body required");
@@ -355,6 +664,8 @@ static esp_err_t api_wireguard_config_handler(httpd_req_t *req) {
 
 /* POST /api/route53/sync */
 static esp_err_t api_route53_sync_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     wireguard_status_t wg_st;
     wireguard_manager_get_status(&wg_st);
 
@@ -377,6 +688,8 @@ static esp_err_t api_route53_sync_handler(httpd_req_t *req) {
 
 /* POST /api/wifi/connect */
 static esp_err_t api_wifi_connect_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     char *body = read_request_body(req);
     if (!body) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing credentials");
@@ -453,7 +766,10 @@ static esp_err_t api_system_info_handler(httpd_req_t *req) {
         wifi_mode_str = "STA_ONLY";
     }
 
-    char json[1024];
+    bool is_wg = is_wireguard_request(req);
+    bool pass_configured = (strlen(s_web_password) > 0);
+
+    char json[1200];
     snprintf(json, sizeof(json),
         "{"
         "\"app\":\"VorotaBot-esp32\","
@@ -463,6 +779,10 @@ static esp_err_t api_system_info_handler(httpd_req_t *req) {
         "\"cpu_freq_mhz\":%lu,"
         "\"heap_free\":%lu,"
         "\"uptime_s\":%lld,"
+        "\"auth\":{"
+          "\"is_wireguard\":%s,"
+          "\"password_configured\":%s"
+        "},"
         "\"wifi\":{"
           "\"mode\":\"%s\","
           "\"ap_enabled\":%s,"
@@ -496,6 +816,8 @@ static esp_err_t api_system_info_handler(httpd_req_t *req) {
         (unsigned long)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
         (unsigned long)esp_get_free_heap_size(),
         (long long)(esp_timer_get_time() / 1000000),
+        is_wg ? "true" : "false",
+        pass_configured ? "true" : "false",
         wifi_mode_str,
         wifi_cfg.ap_enabled ? "true" : "false",
         wifi_cfg.sta_connected ? "true" : "false",
@@ -524,6 +846,8 @@ static esp_err_t api_system_info_handler(httpd_req_t *req) {
 
 /* POST /api/system/restart */
 static esp_err_t api_system_restart_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\",\"message\":\"Rebooting ESP32...\"}");
     ota_manager_reboot_delayed(800);
@@ -532,6 +856,8 @@ static esp_err_t api_system_restart_handler(httpd_req_t *req) {
 
 /* POST /api/system/factory-reset */
 static esp_err_t api_system_factory_reset_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     nvs_manager_factory_reset();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\",\"message\":\"Factory reset complete. Rebooting...\"}");
@@ -541,6 +867,8 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req) {
 
 /* POST /api/system/ota */
 static esp_err_t api_system_ota_handler(httpd_req_t *req) {
+    if (!check_auth_or_reject(req)) return ESP_OK;
+
     ESP_LOGI(TAG, "Starting OTA stream upload (Total size: %d bytes)...", req->content_len);
 
     if (req->content_len <= 0) {
@@ -674,6 +1002,20 @@ esp_err_t web_server_start(const web_server_config_t *user_config) {
 
         httpd_uri_t uri_ota = { .uri = "/api/system/ota", .method = HTTP_POST, .handler = api_system_ota_handler };
         httpd_register_uri_handler(s_server, &uri_ota);
+
+        // Auth & Access Control Routes
+        httpd_uri_t uri_auth_st = { .uri = "/api/auth/status", .method = HTTP_GET, .handler = api_auth_status_handler };
+        httpd_register_uri_handler(s_server, &uri_auth_st);
+
+        httpd_uri_t uri_auth_login = { .uri = "/api/auth/login", .method = HTTP_POST, .handler = api_auth_login_handler };
+        httpd_register_uri_handler(s_server, &uri_auth_login);
+
+        httpd_uri_t uri_auth_pass = { .uri = "/api/auth/password", .method = HTTP_POST, .handler = api_auth_password_handler };
+        httpd_register_uri_handler(s_server, &uri_auth_pass);
+
+        // Wi-Fi SoftAP Runtime Toggle Route
+        httpd_uri_t uri_wifi_ap = { .uri = "/api/wifi/ap", .method = HTTP_POST, .handler = api_wifi_ap_handler };
+        httpd_register_uri_handler(s_server, &uri_wifi_ap);
 
         // Catch-all SPIFFS web assets handler
         httpd_uri_t uri_spiffs = { .uri = "/*", .method = HTTP_GET, .handler = spiffs_catch_all_handler };

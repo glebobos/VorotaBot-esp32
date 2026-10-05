@@ -129,8 +129,49 @@ function mockEsp32DevPlugin(): Plugin {
   };
 }
 
+function inlineSingleHtmlPlugin(): Plugin {
+  return {
+    name: 'inline-single-html',
+    enforce: 'post',
+    generateBundle(_, bundle) {
+      let htmlKey = '';
+      const cssSources: string[] = [];
+      const jsSources: string[] = [];
+
+      for (const [fileName, item] of Object.entries(bundle)) {
+        if (fileName.endsWith('.html') && item.type === 'asset') {
+          htmlKey = fileName;
+        } else if (fileName.endsWith('.css') && item.type === 'asset') {
+          cssSources.push(item.source as string);
+          delete bundle[fileName];
+        } else if (fileName.endsWith('.js') && item.type === 'chunk') {
+          jsSources.push(item.code);
+          delete bundle[fileName];
+        }
+      }
+
+      if (htmlKey && bundle[htmlKey] && bundle[htmlKey].type === 'asset') {
+        let html = (bundle[htmlKey] as any).source as string;
+        // Strip out external stylesheet links and module script tags
+        html = html.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>\s*/gi, '');
+        html = html.replace(/<script[^>]+src=["'][^"']+["'][^>]*><\/script>\s*/gi, '');
+
+        // Inline CSS into head
+        if (cssSources.length > 0) {
+          html = html.replace('</head>', `<style>${cssSources.join('\n')}</style></head>`);
+        }
+        // Inline JS into body
+        if (jsSources.length > 0) {
+          html = html.replace('</body>', `<script>${jsSources.join('\n')}</script></body>`);
+        }
+        (bundle[htmlKey] as any).source = html;
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [mockEsp32DevPlugin()],
+  plugins: [mockEsp32DevPlugin(), inlineSingleHtmlPlugin()],
   build: {
     target: 'es2020',
     minify: 'esbuild',
@@ -139,11 +180,9 @@ export default defineConfig({
     assetsDir: 'assets',
     rollupOptions: {
       output: {
-        entryFileNames: 'assets/[name]-[hash].js',
-        chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash].[ext]',
         manualChunks: undefined,
       },
     },
   },
 });
+

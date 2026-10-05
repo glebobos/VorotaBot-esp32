@@ -114,10 +114,15 @@ The second RDC1-2R module connects directly to the button pads of the Nice remot
 
 ### 1. Wi-Fi & Captive Portal
 * Connects to external Wi-Fi in Station (STA) mode.
-* SoftAP is disabled by default and enabled only if external Wi-Fi is not configured (e.g. initial setup or after factory reset).
+* SoftAP is disabled by default and enabled only if external Wi-Fi is not configured (e.g. initial setup or after factory reset). Can also be manually toggled from the Web UI.
 * When SoftAP is enabled, captive portal (`VorotaBot-AP`, password: `12345678`) is accessible at `http://192.168.4.1/` or `http://vorota.local/`.
 
-### 2. WireGuard VPN Client
+### 2. Web Access Security & Authentication
+* **WireGuard Bypass**: Connections originating over the WireGuard VPN tunnel are recognized as trusted and completely bypass Web UI password prompts.
+* **Local Network Protection**: Connections over local Wi-Fi, LAN, or SoftAP can be protected with a custom password configured directly in the Web UI (stored in NVS key `web_pass`).
+* When enabled, local Wi-Fi users are prompted with a sleek login modal and issue an authenticated session token (`X-Auth-Token`) before gate controls and sensitive settings can be modified.
+
+### 3. WireGuard VPN Client
 * Embedded client connects directly to your AWS WireGuard server (e.g. BelKeeper VPN).
 * Time is automatically synchronized via SNTP before the handshake.
 * Assigned IP (`10.0.0.X`) allows secure remote control from anywhere over the VPN.
@@ -169,6 +174,10 @@ The second RDC1-2R module connects directly to the button pads of the Nice remot
 | `/api/wireguard/config` | `POST` | Text (`.conf` format) | Update WireGuard credentials |
 | `/api/route53/sync` | `POST` | — | Force immediate Route 53 DNS update |
 | `/api/wifi/connect` | `POST` | `{"ssid":"...","password":"..."}` | Connect to Wi-Fi network |
+| `/api/wifi/ap` | `POST` | `{"enabled":true\|false}` | Enable or disable SoftAP hotspot on demand |
+| `/api/auth/status` | `GET` | — | Check connection type (WireGuard vs Wi-Fi) and auth state |
+| `/api/auth/login` | `POST` | `{"password":"..."}` | Authenticate local Wi-Fi session, returns token |
+| `/api/auth/password` | `POST` | `{"current_password":"...","new_password":"..."}` | Set, update, or remove Web UI password |
 | `/api/system/info` | `GET` | — | Complete system diagnostics JSON |
 | `/api/system/restart` | `POST` | — | Reboot ESP32 |
 | `/api/system/factory-reset` | `POST` | — | Reset all NVS settings to factory defaults |

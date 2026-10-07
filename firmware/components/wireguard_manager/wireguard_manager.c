@@ -62,6 +62,13 @@ static esp_err_t load_config_from_nvs(void) {
     s_status.is_enabled = s_config.enabled;
     snprintf(s_status.endpoint, sizeof(s_status.endpoint), "%s", s_config.peer_endpoint);
 
+    char clean_ip[32] = {0};
+    snprintf(clean_ip, sizeof(clean_ip), "%s", s_config.address);
+    char *slash = strchr(clean_ip, '/');
+    if (slash) *slash = '\0';
+    trim_whitespace(clean_ip);
+    snprintf(s_status.assigned_ip, sizeof(s_status.assigned_ip), "%s", clean_ip);
+
     ESP_LOGI(TAG, "WireGuard config loaded: configured=%s, enabled=%s, endpoint=%s:%u, ip=%s",
              configured ? "YES" : "NO", s_config.enabled ? "YES" : "NO",
              s_config.peer_endpoint, s_config.peer_port, s_config.address);
@@ -340,6 +347,13 @@ esp_err_t wireguard_manager_set_config(const wg_manager_config_t *config) {
     s_status.is_configured = (strlen(s_config.private_key) > 0 && strlen(s_config.peer_public_key) > 0 && strlen(s_config.peer_endpoint) > 0);
     s_status.is_enabled = s_config.enabled;
     snprintf(s_status.endpoint, sizeof(s_status.endpoint), "%s", s_config.peer_endpoint);
+
+    char clean_ip[32] = {0};
+    snprintf(clean_ip, sizeof(clean_ip), "%s", s_config.address);
+    char *slash = strchr(clean_ip, '/');
+    if (slash) *slash = '\0';
+    trim_whitespace(clean_ip);
+    snprintf(s_status.assigned_ip, sizeof(s_status.assigned_ip), "%s", clean_ip);
     s_config_updated = true;
     xSemaphoreGive(s_lock);
 

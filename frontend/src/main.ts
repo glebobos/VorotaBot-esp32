@@ -45,6 +45,8 @@ interface AuthStatus {
   is_wireguard: boolean;
   password_configured: boolean;
   authenticated: boolean;
+  local_ip?: string;
+  client_ip?: string;
 }
 
 interface GateStatus {

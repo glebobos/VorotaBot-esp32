@@ -27,6 +27,7 @@ typedef struct {
     char sta_password[64];
     bool sta_connected;
     char sta_ip[16];
+    char sta_netmask[16];
 } wifi_mgr_config_t;
 
 /**
@@ -100,6 +101,11 @@ const char* wifi_manager_get_sta_ip(void);
  * @brief Get STA RSSI signal strength if connected (returns 0 if disconnected).
  */
 int8_t wifi_manager_get_sta_rssi(void);
+
+/**
+ * @brief Check if a peer IP address belongs to the same subnet as the STA interface.
+ */
+bool wifi_manager_is_in_sta_subnet(const char *ip_str);
 
 #ifdef __cplusplus
 }

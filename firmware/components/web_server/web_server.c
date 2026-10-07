@@ -204,54 +204,117 @@ static void init_web_auth(void) {
     s_auth_initialized = true;
 }
 
+static void trim_str(char *str) {
+    if (!str || !*str) return;
+    char *end = str + strlen(str) - 1;
+    while (end >= str && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
+        *end = '\0';
+        end--;
+    }
+}
+
 static bool is_wireguard_request(httpd_req_t *req) {
-    // 1. Check HTTP Host header (e.g. vorota.glebos.click, *.click, or WireGuard 10.x.x.x IP)
-    char host[128] = {0};
-    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK) {
-        if (strstr(host, "vorota.") != NULL ||
-            strstr(host, "glebos.click") != NULL ||
-            strncmp(host, "10.", 3) == 0) {
-            return true;
-        }
-    }
-
-    // 2. Inspect socket local address (destination IP) and peer address (source IP)
     int sockfd = httpd_req_to_sockfd(req);
-    if (sockfd >= 0) {
-        // Destination address on ESP32
-        struct sockaddr_in local_addr;
-        socklen_t addr_len = sizeof(local_addr);
-        if (getsockname(sockfd, (struct sockaddr *)&local_addr, &addr_len) == 0) {
-            char local_ip[32] = {0};
-            inet_ntop(AF_INET, &local_addr.sin_addr, local_ip, sizeof(local_ip));
-            if (strncmp(local_ip, "10.", 3) == 0) {
-                return true;
-            }
-        }
+    if (sockfd < 0) return false;
 
-        // Source address of the client
-        struct sockaddr_in peer_addr;
-        socklen_t peer_len = sizeof(peer_addr);
-        if (getpeername(sockfd, (struct sockaddr *)&peer_addr, &peer_len) == 0) {
-            char peer_ip[32] = {0};
-            inet_ntop(AF_INET, &peer_addr.sin_addr, peer_ip, sizeof(peer_ip));
-            if (strncmp(peer_ip, "10.", 3) == 0) {
-                return true;
-            }
+    // 1. Inspect destination IP (local socket address) and source IP (peer socket address)
+    struct sockaddr_in local_addr = {0};
+    socklen_t addr_len = sizeof(local_addr);
+    char local_ip[32] = {0};
+    if (getsockname(sockfd, (struct sockaddr *)&local_addr, &addr_len) == 0) {
+        inet_ntop(AF_INET, &local_addr.sin_addr, local_ip, sizeof(local_ip));
+    }
+
+    struct sockaddr_in peer_addr = {0};
+    socklen_t peer_len = sizeof(peer_addr);
+    char peer_ip[32] = {0};
+    if (getpeername(sockfd, (struct sockaddr *)&peer_addr, &peer_len) == 0) {
+        inet_ntop(AF_INET, &peer_addr.sin_addr, peer_ip, sizeof(peer_ip));
+    }
+
+    // 2. Explicitly reject requests received on SoftAP interface (192.168.4.x)
+    if (strcmp(local_ip, "192.168.4.1") == 0 || strncmp(peer_ip, "192.168.4.", 10) == 0) {
+        ESP_LOGD(TAG, "is_wireguard_request: rejected SoftAP (local=%s, peer=%s)", local_ip, peer_ip);
+        return false;
+    }
+
+    // 3. Explicitly reject requests received on local Wi-Fi Station IP or from Wi-Fi LAN subnet
+    wifi_mgr_config_t wifi_cfg;
+    wifi_manager_get_config(&wifi_cfg);
+    if (strlen(wifi_cfg.sta_ip) > 0 && strcmp(wifi_cfg.sta_ip, "0.0.0.0") != 0) {
+        if (strcmp(local_ip, wifi_cfg.sta_ip) == 0) {
+            ESP_LOGD(TAG, "is_wireguard_request: rejected STA destination (local=%s, sta=%s)", local_ip, wifi_cfg.sta_ip);
+            return false;
+        }
+        if (wifi_manager_is_in_sta_subnet(peer_ip)) {
+            ESP_LOGD(TAG, "is_wireguard_request: rejected STA subnet peer (peer=%s, sta=%s)", peer_ip, wifi_cfg.sta_ip);
+            return false;
         }
     }
 
-    // 3. Fallback: check if host matches assigned wireguard IP
+    // 4. Any generic 192.168.x.x destination is local LAN
+    if (strncmp(local_ip, "192.168.", 8) == 0) {
+        ESP_LOGD(TAG, "is_wireguard_request: rejected 192.168.x.x local_ip (%s)", local_ip);
+        return false;
+    }
+
+    // 5. WireGuard IP extraction (status or fallback to config or NVS)
+    char wg_ip[32] = {0};
     wireguard_status_t wg_st;
     wireguard_manager_get_status(&wg_st);
-    if (strlen(wg_st.assigned_ip) > 0 && host[0] != '\0') {
-        if (strstr(host, wg_st.assigned_ip) != NULL) {
+    if (strlen(wg_st.assigned_ip) > 0) {
+        snprintf(wg_ip, sizeof(wg_ip), "%s", wg_st.assigned_ip);
+    } else {
+        wg_manager_config_t wg_cfg;
+        if (wireguard_manager_get_config(&wg_cfg) == ESP_OK && strlen(wg_cfg.address) > 0) {
+            snprintf(wg_ip, sizeof(wg_ip), "%s", wg_cfg.address);
+        } else {
+            nvs_manager_get_str("wg_addr", wg_ip, sizeof(wg_ip), "10.0.0.2");
+        }
+    }
+    char *slash = strchr(wg_ip, '/');
+    if (slash) *slash = '\0';
+    trim_str(wg_ip);
+
+    // 6. Match WireGuard interface destination IP
+    if (strlen(wg_ip) > 0 && strcmp(local_ip, wg_ip) == 0) {
+        ESP_LOGI(TAG, "is_wireguard_request: matched WireGuard destination IP %s (peer=%s)", local_ip, peer_ip);
+        return true;
+    }
+
+    // 7. Match WireGuard peer subnet (10.x.x.x)
+    if (strncmp(peer_ip, "10.", 3) == 0) {
+        ESP_LOGI(TAG, "is_wireguard_request: matched WireGuard peer %s (local=%s)", peer_ip, local_ip);
+        return true;
+    }
+
+    // 8. If destination was NOT local Wi-Fi, check Host header for Route 53 FQDN or WireGuard IP
+    char host_hdr[128] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Host", host_hdr, sizeof(host_hdr)) == ESP_OK) {
+        char *colon = strchr(host_hdr, ':');
+        if (colon) *colon = '\0';
+        trim_str(host_hdr);
+
+        aws_route53_status_t r53_st;
+        aws_route53_get_status(&r53_st);
+        if (strlen(r53_st.fqdn) > 0 && strcasecmp(host_hdr, r53_st.fqdn) == 0) {
+            ESP_LOGI(TAG, "is_wireguard_request: matched Route53 FQDN '%s' from non-LAN peer %s", host_hdr, peer_ip);
+            return true;
+        }
+        if (strcasecmp(host_hdr, "vorota.glebos.click") == 0) {
+            ESP_LOGI(TAG, "is_wireguard_request: matched default FQDN '%s' from non-LAN peer %s", host_hdr, peer_ip);
+            return true;
+        }
+        if (strlen(wg_ip) > 0 && strcmp(host_hdr, wg_ip) == 0) {
+            ESP_LOGI(TAG, "is_wireguard_request: matched WireGuard IP Host '%s' from non-LAN peer %s", host_hdr, peer_ip);
             return true;
         }
     }
 
+    ESP_LOGD(TAG, "is_wireguard_request: non-WireGuard request (local=%s, peer=%s, wg=%s)", local_ip, peer_ip, wg_ip);
     return false;
 }
+
 
 
 static bool is_authenticated(httpd_req_t *req) {
@@ -295,12 +358,31 @@ static esp_err_t api_auth_status_handler(httpd_req_t *req) {
     bool pass_set = (strlen(s_web_password) > 0);
     bool auth = is_authenticated(req);
 
-    char json[256];
+    int sockfd = httpd_req_to_sockfd(req);
+    char local_ip[32] = "";
+    char peer_ip[32] = "";
+    if (sockfd >= 0) {
+        struct sockaddr_in la = {0}, pa = {0};
+        socklen_t l = sizeof(la), pl = sizeof(pa);
+        if (getsockname(sockfd, (struct sockaddr *)&la, &l) == 0) {
+            inet_ntop(AF_INET, &la.sin_addr, local_ip, sizeof(local_ip));
+        }
+        if (getpeername(sockfd, (struct sockaddr *)&pa, &pl) == 0) {
+            inet_ntop(AF_INET, &pa.sin_addr, peer_ip, sizeof(peer_ip));
+        }
+    }
+
+    ESP_LOGI(TAG, "api_auth_status: is_wg=%d, auth=%d, local_ip=%s, peer_ip=%s",
+             is_wg, auth, local_ip, peer_ip);
+
+    char json[384];
     snprintf(json, sizeof(json),
-        "{\"is_wireguard\":%s,\"password_configured\":%s,\"authenticated\":%s}",
+        "{\"is_wireguard\":%s,\"password_configured\":%s,\"authenticated\":%s,\"local_ip\":\"%s\",\"client_ip\":\"%s\"}",
         is_wg ? "true" : "false",
         pass_set ? "true" : "false",
-        auth ? "true" : "false"
+        auth ? "true" : "false",
+        local_ip,
+        peer_ip
     );
 
     httpd_resp_set_type(req, "application/json");

@@ -74,6 +74,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                 uint8_t reason = disconn ? disconn->reason : 0;
                 s_config.sta_connected = false;
                 strcpy(s_config.sta_ip, "0.0.0.0");
+                strcpy(s_config.sta_netmask, "0.0.0.0");
                 ESP_LOGW(TAG, "STA disconnected (reason: %u).", reason);
                 if (s_config.sta_enabled) {
                     start_sta_retry_timer();
@@ -90,7 +91,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             s_sta_retry_count = 0;
             stop_sta_retry_timer();
             snprintf(s_config.sta_ip, sizeof(s_config.sta_ip), IPSTR, IP2STR(&event->ip_info.ip));
-            ESP_LOGI(TAG, "STA connected successfully! IP address: %s", s_config.sta_ip);
+            snprintf(s_config.sta_netmask, sizeof(s_config.sta_netmask), IPSTR, IP2STR(&event->ip_info.netmask));
+            ESP_LOGI(TAG, "STA connected successfully! IP address: %s, Netmask: %s", s_config.sta_ip, s_config.sta_netmask);
 
             // Once external Wi-Fi connects successfully, disable SoftAP if active
             if (s_config.ap_enabled) {
@@ -120,6 +122,7 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
     s_config.sta_enabled = (strlen(s_config.sta_ssid) > 0);
     s_config.sta_connected = false;
     strcpy(s_config.sta_ip, "0.0.0.0");
+    strcpy(s_config.sta_netmask, "0.0.0.0");
 
     ESP_ERROR_CHECK(esp_netif_init());
     
@@ -358,4 +361,21 @@ int8_t wifi_manager_get_sta_rssi(void) {
         return ap_info.rssi;
     }
     return 0;
+}
+
+bool wifi_manager_is_in_sta_subnet(const char *ip_str) {
+    if (!ip_str || !s_config.sta_connected || strlen(s_config.sta_ip) == 0 || strcmp(s_config.sta_ip, "0.0.0.0") == 0) {
+        return false;
+    }
+    ip4_addr_t peer_ip, sta_ip, netmask;
+    if (ip4addr_aton(ip_str, &peer_ip) != 1) return false;
+    if (ip4addr_aton(s_config.sta_ip, &sta_ip) != 1) return false;
+    if (strlen(s_config.sta_netmask) > 0 && strcmp(s_config.sta_netmask, "0.0.0.0") != 0) {
+        if (ip4addr_aton(s_config.sta_netmask, &netmask) != 1) {
+            ip4addr_aton("255.255.255.0", &netmask);
+        }
+    } else {
+        ip4addr_aton("255.255.255.0", &netmask);
+    }
+    return ((peer_ip.addr & netmask.addr) == (sta_ip.addr & netmask.addr));
 }

@@ -37,6 +37,7 @@ print_usage() {
   echo "  monitor            Start interactive serial monitor (Ctrl+] to exit)"
   echo "  flash-monitor      Flash firmware and immediately open serial monitor"
   echo "  provision          Generate & flash NVS credentials (WireGuard, AWS, Wi-Fi)"
+  echo "  test               Run synthetic unit tests (100% Docker)"
   echo "  clean              Remove build directories and caches"
   echo "  size               Analyze firmware memory usage and partition sizes"
   echo "  erase-flash        Erase entire flash memory of connected ESP32"
@@ -352,7 +353,11 @@ case "$CMD" in
     ;;
 
 
-    
+  test)
+    log_info "Running synthetic unit test suite inside Docker..."
+    run_cmd docker run --rm -v "$(pwd):/project" -w /project vorotabot-idf ./tests/run_tests.sh
+    ;;
+
   size)
     log_info "Analyzing firmware binary size & memory allocation..."
     run_cmd docker run --rm -v "$(pwd)/firmware:/project" -w /project vorotabot-idf idf.py size

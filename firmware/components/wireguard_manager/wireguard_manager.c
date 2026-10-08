@@ -25,12 +25,15 @@ static bool s_wifi_connected = false;
 static bool s_config_updated = false;
 
 static void trim_whitespace(char *str) {
-    char *end;
-    while (isspace((unsigned char)*str)) str++;
-    if (*str == 0) return;
-    end = str + strlen(str) - 1;
-    while (end > str && isspace((unsigned char)*end)) end--;
-    end[1] = '\0';
+    if (!str) return;
+    char *start = str;
+    while (isspace((unsigned char)*start)) start++;
+    char *end = start + strlen(start);
+    while (end > start && isspace((unsigned char)*(end - 1))) end--;
+    *end = '\0';
+    if (start > str) {
+        memmove(str, start, end - start + 1);
+    }
 }
 
 static esp_err_t load_config_from_nvs(void) {

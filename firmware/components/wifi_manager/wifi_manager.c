@@ -7,16 +7,38 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "lwip/ip_addr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "WIFI_MGR";
 
 static esp_netif_t *s_ap_netif = NULL;
 static esp_netif_t *s_sta_netif = NULL;
 static wifi_mgr_config_t s_config;
+static SemaphoreHandle_t s_wifi_mutex = NULL;
+
 static esp_timer_handle_t s_sta_retry_timer = NULL;
 static uint32_t s_sta_retry_count = 0;
 #define STA_RETRY_INTERVAL_MS 30000 // 30 seconds
+
+// Credential verification state
+static bool s_sta_pending_verification = false;
+static char s_sta_prev_ssid[32] = {0};
+static char s_sta_prev_pass[64] = {0};
+
+static void wifi_lock(void) {
+    if (s_wifi_mutex) {
+        xSemaphoreTakeRecursive(s_wifi_mutex, portMAX_DELAY);
+    }
+}
+
+static void wifi_unlock(void) {
+    if (s_wifi_mutex) {
+        xSemaphoreGiveRecursive(s_wifi_mutex);
+    }
+}
 
 static void stop_sta_retry_timer(void) {
     if (s_sta_retry_timer && esp_timer_is_active(s_sta_retry_timer)) {
@@ -35,15 +57,36 @@ static void start_sta_retry_timer(void) {
 }
 
 static void sta_retry_timer_cb(void *arg) {
+    wifi_lock();
     if (s_config.sta_enabled && !s_config.sta_connected) {
         s_sta_retry_count++;
         ESP_LOGI(TAG, "Attempting Wi-Fi STA reconnection (attempt %lu)...", (unsigned long)s_sta_retry_count);
+
+        if (s_sta_retry_count >= 5 && !s_config.ap_enabled) {
+            ESP_LOGW(TAG, "STA failed to connect after %lu attempts. Enabling fallback SoftAP for recovery.", (unsigned long)s_sta_retry_count);
+            wifi_manager_enable_ap();
+        }
+
+        if (s_sta_pending_verification && s_sta_retry_count >= 5) {
+            ESP_LOGW(TAG, "New STA credentials failed verification! Restoring previous configuration.");
+            if (strlen(s_sta_prev_ssid) > 0) {
+                snprintf(s_config.sta_ssid, sizeof(s_config.sta_ssid), "%s", s_sta_prev_ssid);
+                snprintf(s_config.sta_password, sizeof(s_config.sta_password), "%s", s_sta_prev_pass);
+            } else {
+                s_config.sta_enabled = false;
+                s_config.sta_ssid[0] = '\0';
+                s_config.sta_password[0] = '\0';
+            }
+            s_sta_pending_verification = false;
+        }
+
         esp_err_t err = esp_wifi_connect();
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "esp_wifi_connect returned error: %s. Re-arming retry timer...", esp_err_to_name(err));
             start_sta_retry_timer();
         }
     }
+    wifi_unlock();
 }
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -64,21 +107,41 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                 break;
             }
             case WIFI_EVENT_STA_START:
+                wifi_lock();
                 if (s_config.sta_enabled) {
                     ESP_LOGI(TAG, "Connecting to STA AP '%s'...", s_config.sta_ssid);
                     esp_wifi_connect();
                 }
+                wifi_unlock();
                 break;
             case WIFI_EVENT_STA_DISCONNECTED: {
                 wifi_event_sta_disconnected_t* disconn = (wifi_event_sta_disconnected_t*) event_data;
                 uint8_t reason = disconn ? disconn->reason : 0;
+                wifi_lock();
                 s_config.sta_connected = false;
                 strcpy(s_config.sta_ip, "0.0.0.0");
                 strcpy(s_config.sta_netmask, "0.0.0.0");
                 ESP_LOGW(TAG, "STA disconnected (reason: %u).", reason);
                 if (s_config.sta_enabled) {
+                    if (s_sta_pending_verification && s_sta_retry_count >= 5) {
+                        ESP_LOGW(TAG, "New STA credentials verification failed. Restoring previous state.");
+                        if (strlen(s_sta_prev_ssid) > 0) {
+                            snprintf(s_config.sta_ssid, sizeof(s_config.sta_ssid), "%s", s_sta_prev_ssid);
+                            snprintf(s_config.sta_password, sizeof(s_config.sta_password), "%s", s_sta_prev_pass);
+                        } else {
+                            s_config.sta_enabled = false;
+                            s_config.sta_ssid[0] = '\0';
+                            s_config.sta_password[0] = '\0';
+                        }
+                        s_sta_pending_verification = false;
+                    }
+                    if (s_sta_retry_count >= 5 && !s_config.ap_enabled) {
+                        ESP_LOGW(TAG, "STA disconnected and retry threshold reached (%lu). Re-enabling SoftAP fallback.", (unsigned long)s_sta_retry_count);
+                        wifi_manager_enable_ap();
+                    }
                     start_sta_retry_timer();
                 }
+                wifi_unlock();
                 break;
             }
             default:
@@ -87,6 +150,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT) {
         if (event_id == IP_EVENT_STA_GOT_IP) {
             ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+            wifi_lock();
             s_config.sta_connected = true;
             s_sta_retry_count = 0;
             stop_sta_retry_timer();
@@ -94,17 +158,30 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             snprintf(s_config.sta_netmask, sizeof(s_config.sta_netmask), IPSTR, IP2STR(&event->ip_info.netmask));
             ESP_LOGI(TAG, "STA connected successfully! IP address: %s, Netmask: %s", s_config.sta_ip, s_config.sta_netmask);
 
+            // Commit validated credentials to NVS
+            if (s_sta_pending_verification) {
+                nvs_manager_set_str("sta_ssid", s_config.sta_ssid);
+                nvs_manager_set_str("sta_pass", s_config.sta_password);
+                s_sta_pending_verification = false;
+                ESP_LOGI(TAG, "Verified and committed new STA credentials to NVS");
+            }
+
             // Once external Wi-Fi connects successfully, disable SoftAP if active
             if (s_config.ap_enabled) {
                 ESP_LOGI(TAG, "External Wi-Fi connected and operational. Disabling SoftAP.");
                 s_config.ap_enabled = false;
                 esp_wifi_set_mode(WIFI_MODE_STA);
             }
+            wifi_unlock();
         }
     }
 }
 
 esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) {
+    if (!s_wifi_mutex) {
+        s_wifi_mutex = xSemaphoreCreateRecursiveMutex();
+    }
+    wifi_lock();
     memset(&s_config, 0, sizeof(s_config));
     
     // Load config from NVS or fallback to defaults
@@ -130,6 +207,7 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
     s_ap_netif = esp_netif_create_default_wifi_ap();
     if (!s_ap_netif) {
         ESP_LOGE(TAG, "Failed to create SoftAP netif");
+        wifi_unlock();
         return ESP_FAIL;
     }
     
@@ -159,8 +237,8 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
         
         wifi_config_t wifi_sta_config;
         memset(&wifi_sta_config, 0, sizeof(wifi_sta_config));
-        strncpy((char*)wifi_sta_config.sta.ssid, s_config.sta_ssid, sizeof(wifi_sta_config.sta.ssid));
-        strncpy((char*)wifi_sta_config.sta.password, s_config.sta_password, sizeof(wifi_sta_config.sta.password));
+        snprintf((char*)wifi_sta_config.sta.ssid, sizeof(wifi_sta_config.sta.ssid), "%s", s_config.sta_ssid);
+        snprintf((char*)wifi_sta_config.sta.password, sizeof(wifi_sta_config.sta.password), "%s", s_config.sta_password);
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_sta_config));
     } else {
         // External Wi-Fi is not configured: enable SoftAP mode
@@ -176,9 +254,9 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
                 .ssid_hidden = s_config.ap_hidden ? 1 : 0,
             },
         };
-        strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+        snprintf((char*)wifi_ap_config.ap.ssid, sizeof(wifi_ap_config.ap.ssid), "%s", s_config.ap_ssid);
         wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
-        strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
+        snprintf((char*)wifi_ap_config.ap.password, sizeof(wifi_ap_config.ap.password), "%s", s_config.ap_password);
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config));
     }
 
@@ -194,77 +272,107 @@ esp_err_t wifi_manager_init(const char *default_ssid, const char *default_pass) 
     }
 
     ESP_ERROR_CHECK(esp_wifi_start());
+    wifi_unlock();
     return ESP_OK;
 }
 
 void wifi_manager_get_config(wifi_mgr_config_t *out_config) {
     if (out_config) {
+        wifi_lock();
         memcpy(out_config, &s_config, sizeof(wifi_mgr_config_t));
+        wifi_unlock();
     }
 }
 
 esp_err_t wifi_manager_set_ap_credentials(const char *ssid, const char *password) {
     if (!ssid || strlen(ssid) == 0) return ESP_ERR_INVALID_ARG;
     
+    wifi_lock();
     nvs_manager_set_str("ap_ssid", ssid);
     if (password) {
         nvs_manager_set_str("ap_pass", password);
     }
     
-    strncpy(s_config.ap_ssid, ssid, sizeof(s_config.ap_ssid) - 1);
+    snprintf(s_config.ap_ssid, sizeof(s_config.ap_ssid), "%s", ssid);
     if (password) {
-        strncpy(s_config.ap_password, password, sizeof(s_config.ap_password) - 1);
+        snprintf(s_config.ap_password, sizeof(s_config.ap_password), "%s", password);
     }
     
     if (s_config.ap_enabled) {
         wifi_config_t wifi_ap_config;
         esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &wifi_ap_config);
         if (err == ESP_OK) {
-            strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+            snprintf((char*)wifi_ap_config.ap.ssid, sizeof(wifi_ap_config.ap.ssid), "%s", s_config.ap_ssid);
             wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
             if (password) {
-                strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
+                snprintf((char*)wifi_ap_config.ap.password, sizeof(wifi_ap_config.ap.password), "%s", s_config.ap_password);
                 wifi_ap_config.ap.authmode = (strlen(password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
             }
-            return esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+            esp_err_t ret = esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+            wifi_unlock();
+            return ret;
         }
     }
+    wifi_unlock();
     return ESP_OK;
 }
 
 esp_err_t wifi_manager_set_sta_credentials(const char *ssid, const char *password) {
     if (!ssid || strlen(ssid) == 0) return ESP_ERR_INVALID_ARG;
     
+    wifi_lock();
     stop_sta_retry_timer();
     s_sta_retry_count = 0;
 
-    nvs_manager_set_str("sta_ssid", ssid);
-    nvs_manager_set_str("sta_pass", password ? password : "");
-    
-    strncpy(s_config.sta_ssid, ssid, sizeof(s_config.sta_ssid) - 1);
-    strncpy(s_config.sta_password, password ? password : "", sizeof(s_config.sta_password) - 1);
+    // Cache previous credentials in case new ones fail verification
+    snprintf(s_sta_prev_ssid, sizeof(s_sta_prev_ssid), "%s", s_config.sta_ssid);
+    snprintf(s_sta_prev_pass, sizeof(s_sta_prev_pass), "%s", s_config.sta_password);
+    s_sta_pending_verification = true;
+
+    // Apply credentials to runtime struct
+    snprintf(s_config.sta_ssid, sizeof(s_config.sta_ssid), "%s", ssid);
+    snprintf(s_config.sta_password, sizeof(s_config.sta_password), "%s", password ? password : "");
     s_config.sta_enabled = true;
-    
-    if (s_config.ap_enabled) {
-        // Keep SoftAP active in APSTA mode while attempting connection
-        // Once IP is obtained, AP will automatically be disabled.
+    s_config.sta_connected = false;
+    strcpy(s_config.sta_ip, "0.0.0.0");
+    strcpy(s_config.sta_netmask, "0.0.0.0");
+
+    // Keep or re-enable SoftAP in APSTA mode so caller retains access during connection attempt
+    if (!s_config.ap_enabled) {
+        s_config.ap_enabled = true;
         esp_wifi_set_mode(WIFI_MODE_APSTA);
+        wifi_config_t wifi_ap_config = {
+            .ap = {
+                .channel = s_config.ap_channel,
+                .max_connection = s_config.ap_max_connections,
+                .authmode = (strlen(s_config.ap_password) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN,
+                .ssid_hidden = s_config.ap_hidden ? 1 : 0,
+            },
+        };
+        snprintf((char*)wifi_ap_config.ap.ssid, sizeof(wifi_ap_config.ap.ssid), "%s", s_config.ap_ssid);
+        wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
+        snprintf((char*)wifi_ap_config.ap.password, sizeof(wifi_ap_config.ap.password), "%s", s_config.ap_password);
+        esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
     } else {
-        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
     }
     
     wifi_config_t wifi_sta_config;
     memset(&wifi_sta_config, 0, sizeof(wifi_sta_config));
-    strncpy((char*)wifi_sta_config.sta.ssid, s_config.sta_ssid, sizeof(wifi_sta_config.sta.ssid));
-    strncpy((char*)wifi_sta_config.sta.password, s_config.sta_password, sizeof(wifi_sta_config.sta.password));
+    snprintf((char*)wifi_sta_config.sta.ssid, sizeof(wifi_sta_config.sta.ssid), "%s", s_config.sta_ssid);
+    snprintf((char*)wifi_sta_config.sta.password, sizeof(wifi_sta_config.sta.password), "%s", s_config.sta_password);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_sta_config);
     
-    return esp_wifi_connect();
+    esp_err_t ret = esp_wifi_connect();
+    wifi_unlock();
+    return ret;
 }
 
 esp_err_t wifi_manager_disable_sta(void) {
+    wifi_lock();
     stop_sta_retry_timer();
     s_sta_retry_count = 0;
+    s_sta_pending_verification = false;
 
     nvs_manager_erase_key("sta_ssid");
     nvs_manager_erase_key("sta_pass");
@@ -274,6 +382,7 @@ esp_err_t wifi_manager_disable_sta(void) {
     s_config.sta_ssid[0] = '\0';
     s_config.sta_password[0] = '\0';
     strcpy(s_config.sta_ip, "0.0.0.0");
+    strcpy(s_config.sta_netmask, "0.0.0.0");
     
     esp_wifi_disconnect();
 
@@ -290,23 +399,35 @@ esp_err_t wifi_manager_disable_sta(void) {
             .ssid_hidden = s_config.ap_hidden ? 1 : 0,
         },
     };
-    strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+    snprintf((char*)wifi_ap_config.ap.ssid, sizeof(wifi_ap_config.ap.ssid), "%s", s_config.ap_ssid);
     wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
-    strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
-    return esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+    snprintf((char*)wifi_ap_config.ap.password, sizeof(wifi_ap_config.ap.password), "%s", s_config.ap_password);
+    esp_err_t ret = esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+    wifi_unlock();
+    return ret;
 }
 
 bool wifi_manager_is_ap_enabled(void) {
-    return s_config.ap_enabled;
+    wifi_lock();
+    bool enabled = s_config.ap_enabled;
+    wifi_unlock();
+    return enabled;
 }
 
 esp_err_t wifi_manager_enable_ap(void) {
-    if (s_config.ap_enabled) return ESP_OK;
+    wifi_lock();
+    if (s_config.ap_enabled) {
+        wifi_unlock();
+        return ESP_OK;
+    }
 
     s_config.ap_enabled = true;
     wifi_mode_t target_mode = s_config.sta_enabled ? WIFI_MODE_APSTA : WIFI_MODE_AP;
     esp_err_t err = esp_wifi_set_mode(target_mode);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        wifi_unlock();
+        return err;
+    }
 
     wifi_config_t wifi_ap_config = {
         .ap = {
@@ -316,25 +437,41 @@ esp_err_t wifi_manager_enable_ap(void) {
             .ssid_hidden = s_config.ap_hidden ? 1 : 0,
         },
     };
-    strncpy((char*)wifi_ap_config.ap.ssid, s_config.ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+    snprintf((char*)wifi_ap_config.ap.ssid, sizeof(wifi_ap_config.ap.ssid), "%s", s_config.ap_ssid);
     wifi_ap_config.ap.ssid_len = strlen(s_config.ap_ssid);
-    strncpy((char*)wifi_ap_config.ap.password, s_config.ap_password, sizeof(wifi_ap_config.ap.password));
-    return esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+    snprintf((char*)wifi_ap_config.ap.password, sizeof(wifi_ap_config.ap.password), "%s", s_config.ap_password);
+    err = esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
+    wifi_unlock();
+    return err;
 }
 
 esp_err_t wifi_manager_disable_ap(void) {
-    if (!s_config.ap_enabled) return ESP_OK;
+    wifi_lock();
+    if (!s_config.ap_enabled) {
+        wifi_unlock();
+        return ESP_OK;
+    }
+
+    // Safety interlock: prevent turning off SoftAP if STA is not currently connected
+    if (!s_config.sta_connected) {
+        ESP_LOGW(TAG, "Cannot disable SoftAP: Station is not connected to a network. Keeping AP active to prevent lockout.");
+        wifi_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
 
     s_config.ap_enabled = false;
-    if (s_config.sta_enabled) {
-        return esp_wifi_set_mode(WIFI_MODE_STA);
-    } else {
-        return esp_wifi_set_mode(WIFI_MODE_NULL);
-    }
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+    wifi_unlock();
+    return err;
 }
 
 int wifi_manager_get_ap_client_count(void) {
-    if (!s_config.ap_enabled) return 0;
+    wifi_lock();
+    if (!s_config.ap_enabled) {
+        wifi_unlock();
+        return 0;
+    }
+    wifi_unlock();
     wifi_sta_list_t sta_list;
     if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
         return sta_list.num;
@@ -343,7 +480,10 @@ int wifi_manager_get_ap_client_count(void) {
 }
 
 bool wifi_manager_is_sta_connected(void) {
-    return s_config.sta_connected;
+    wifi_lock();
+    bool connected = s_config.sta_connected;
+    wifi_unlock();
+    return connected;
 }
 
 const char* wifi_manager_get_ap_ip(void) {
@@ -351,11 +491,20 @@ const char* wifi_manager_get_ap_ip(void) {
 }
 
 const char* wifi_manager_get_sta_ip(void) {
-    return s_config.sta_ip;
+    wifi_lock();
+    static char s_out_sta_ip[16];
+    snprintf(s_out_sta_ip, sizeof(s_out_sta_ip), "%s", s_config.sta_ip);
+    wifi_unlock();
+    return s_out_sta_ip;
 }
 
 int8_t wifi_manager_get_sta_rssi(void) {
-    if (!s_config.sta_connected) return 0;
+    wifi_lock();
+    if (!s_config.sta_connected) {
+        wifi_unlock();
+        return 0;
+    }
+    wifi_unlock();
     wifi_ap_record_t ap_info;
     if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
         return ap_info.rssi;
@@ -364,12 +513,17 @@ int8_t wifi_manager_get_sta_rssi(void) {
 }
 
 bool wifi_manager_is_in_sta_subnet(const char *ip_str) {
-    if (!ip_str || !s_config.sta_connected || strlen(s_config.sta_ip) == 0 || strcmp(s_config.sta_ip, "0.0.0.0") == 0) {
+    if (!ip_str) return false;
+    wifi_lock();
+    if (!s_config.sta_connected || strlen(s_config.sta_ip) == 0 || strcmp(s_config.sta_ip, "0.0.0.0") == 0) {
+        wifi_unlock();
         return false;
     }
     ip4_addr_t peer_ip, sta_ip, netmask;
-    if (ip4addr_aton(ip_str, &peer_ip) != 1) return false;
-    if (ip4addr_aton(s_config.sta_ip, &sta_ip) != 1) return false;
+    if (ip4addr_aton(ip_str, &peer_ip) != 1 || ip4addr_aton(s_config.sta_ip, &sta_ip) != 1) {
+        wifi_unlock();
+        return false;
+    }
     if (strlen(s_config.sta_netmask) > 0 && strcmp(s_config.sta_netmask, "0.0.0.0") != 0) {
         if (ip4addr_aton(s_config.sta_netmask, &netmask) != 1) {
             ip4addr_aton("255.255.255.0", &netmask);
@@ -377,5 +531,7 @@ bool wifi_manager_is_in_sta_subnet(const char *ip_str) {
     } else {
         ip4addr_aton("255.255.255.0", &netmask);
     }
-    return ((peer_ip.addr & netmask.addr) == (sta_ip.addr & netmask.addr));
+    bool in_subnet = ((peer_ip.addr & netmask.addr) == (sta_ip.addr & netmask.addr));
+    wifi_unlock();
+    return in_subnet;
 }

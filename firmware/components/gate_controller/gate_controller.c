@@ -40,6 +40,7 @@ static QueueHandle_t s_pulse_queue = NULL;
 static SemaphoreHandle_t s_lock = NULL;
 static gate_status_t s_status;
 static int64_t s_last_pulse_end_time_us = 0;
+static volatile bool s_is_pulsing = false;
 
 /* Helper to configure RDC1-2R ULN2003 input pin (Active-HIGH, 0V idle) */
 static void configure_relay_control_pin(gpio_num_t gpio) {
@@ -60,6 +61,7 @@ static void pulse_worker_task(void *pvParameters) {
 
     while (1) {
         if (xQueueReceive(s_pulse_queue, &req, portMAX_DELAY) == pdTRUE) {
+            s_is_pulsing = true;
             ESP_LOGI(TAG, "Energizing relay: %s (GPIO %d, Duration %lu ms)",
                      req.desc, req.gpio_num, (unsigned long)req.duration_ms);
 
@@ -69,6 +71,7 @@ static void pulse_worker_task(void *pvParameters) {
             gpio_set_level(req.gpio_num, 0);
 
             s_last_pulse_end_time_us = esp_timer_get_time();
+            s_is_pulsing = false;
             ESP_LOGI(TAG, "Relay released: %s", req.desc);
         }
     }
@@ -137,6 +140,9 @@ esp_err_t gate_controller_init(void) {
 }
 
 static bool is_interlock_active(void) {
+    if (s_is_pulsing) {
+        return true;
+    }
     int64_t now = esp_timer_get_time();
     int64_t elapsed_ms = (now - s_last_pulse_end_time_us) / 1000;
     return (elapsed_ms < (int64_t)s_status.interlock_delay_ms);

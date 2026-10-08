@@ -236,12 +236,15 @@ typedef struct {
     char target_ip[32];
 } sync_task_arg_t;
 
+static volatile bool s_sync_in_progress = false;
+
 static void sync_worker_task(void *pvParameters) {
     sync_task_arg_t *arg = (sync_task_arg_t *)pvParameters;
     if (arg) {
         execute_route53_update(arg->target_ip);
         free(arg);
     }
+    s_sync_in_progress = false;
     vTaskDelete(NULL);
 }
 
@@ -301,12 +304,19 @@ esp_err_t aws_route53_sync_record(const char *ip_to_register) {
         return ESP_ERR_NOT_SUPPORTED;
     }
 
+    if (s_sync_in_progress) {
+        ESP_LOGW(TAG, "Route 53 sync already running; coalescing duplicate request for IP %s", ip_to_register);
+        return ESP_OK;
+    }
+
     sync_task_arg_t *arg = malloc(sizeof(sync_task_arg_t));
     if (!arg) return ESP_ERR_NO_MEM;
 
     snprintf(arg->target_ip, sizeof(arg->target_ip), "%s", ip_to_register);
 
-    if (xTaskCreate(sync_worker_task, "r53_sync", 16384, arg, 5, NULL) != pdPASS) {
+    s_sync_in_progress = true;
+    if (xTaskCreate(sync_worker_task, "r53_sync", 14336, arg, 5, NULL) != pdPASS) {
+        s_sync_in_progress = false;
         free(arg);
         return ESP_FAIL;
     }

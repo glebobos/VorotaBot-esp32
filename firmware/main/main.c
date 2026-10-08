@@ -48,9 +48,17 @@ static void wifi_ip_event_handler(void* arg, esp_event_base_t event_base,
 
         // Notify WireGuard manager that Internet connectivity is ready
         wireguard_manager_on_wifi_connected();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "Wi-Fi Station disconnected");
-        wireguard_manager_on_wifi_disconnected();
+    } else if (event_base == WIFI_EVENT) {
+        if (event_id == WIFI_EVENT_AP_START) {
+            ESP_LOGI(TAG, "SoftAP active -> starting Captive Portal DNS server");
+            dns_server_start();
+        } else if (event_id == WIFI_EVENT_AP_STOP) {
+            ESP_LOGI(TAG, "SoftAP stopped -> stopping Captive Portal DNS server");
+            dns_server_stop();
+        } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            ESP_LOGW(TAG, "Wi-Fi Station disconnected");
+            wireguard_manager_on_wifi_disconnected();
+        }
     }
 }
 
@@ -69,7 +77,7 @@ void app_main(void) {
 
     // Register event listeners for Wi-Fi and IP events
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_ip_event_handler, NULL, NULL);
-    esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &wifi_ip_event_handler, NULL, NULL);
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_ip_event_handler, NULL, NULL);
 
     // 3. Initialize Gate Hardware Controller (Hörmann & Nice Relay Modules)
     ESP_ERROR_CHECK(gate_controller_init());

@@ -26,6 +26,14 @@ esp_err_t ota_manager_init(void) {
         snprintf(s_status.next_partition_label, sizeof(s_status.next_partition_label), "%s", next->label);
     }
 
+    esp_ota_img_states_t ota_state;
+    if (running && esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
+        if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+            ESP_LOGI(TAG, "First boot of newly flashed firmware. Confirming app and cancelling rollback.");
+            esp_ota_mark_app_valid_cancel_rollback();
+        }
+    }
+
     ESP_LOGI(TAG, "OTA Subsystem Ready: Running='%s' (Ver: %s), Next Target='%s'",
              s_status.current_partition_label, s_status.current_app_version, s_status.next_partition_label);
     return ESP_OK;

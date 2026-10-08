@@ -365,6 +365,15 @@ esp_err_t wireguard_manager_set_config(const wg_manager_config_t *config) {
     return ESP_OK;
 }
 
+static bool is_valid_wg_key(const char *key) {
+    if (!key || strlen(key) != 44) return false;
+    for (int i = 0; i < 43; i++) {
+        char c = key[i];
+        if (!isalnum((unsigned char)c) && c != '+' && c != '/') return false;
+    }
+    return key[43] == '=';
+}
+
 esp_err_t wireguard_manager_set_config_from_text(const char *conf_text) {
     if (!conf_text || strlen(conf_text) == 0) return ESP_ERR_INVALID_ARG;
 
@@ -420,6 +429,28 @@ esp_err_t wireguard_manager_set_config_from_text(const char *conf_text) {
         line = strtok(NULL, "\r\n");
     }
     free(copy);
+
+    // Validate parsed configuration to prevent wiping valid NVS settings with invalid input
+    if (!is_valid_wg_key(parsed.private_key)) {
+        ESP_LOGE(TAG, "Invalid WireGuard PrivateKey: must be a 44-character base64 string");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!is_valid_wg_key(parsed.peer_public_key)) {
+        ESP_LOGE(TAG, "Invalid WireGuard peer PublicKey: must be a 44-character base64 string");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(parsed.preshared_key) > 0 && !is_valid_wg_key(parsed.preshared_key)) {
+        ESP_LOGE(TAG, "Invalid WireGuard PresharedKey: must be a 44-character base64 string");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(parsed.peer_endpoint) == 0 || parsed.peer_port == 0) {
+        ESP_LOGE(TAG, "Invalid WireGuard Endpoint or port");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(parsed.address) == 0) {
+        ESP_LOGE(TAG, "Invalid WireGuard Address");
+        return ESP_ERR_INVALID_ARG;
+    }
 
     ESP_LOGI(TAG, "Parsed WireGuard config: Address=%s, Endpoint=%s:%u, PeerPub=%s",
              parsed.address, parsed.peer_endpoint, parsed.peer_port, parsed.peer_public_key);

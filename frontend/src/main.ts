@@ -44,6 +44,7 @@ interface SystemInfo {
 interface AuthStatus {
   is_wireguard: boolean;
   password_configured: boolean;
+  setup_required?: boolean;
   authenticated: boolean;
   local_ip?: string;
   client_ip?: string;
@@ -77,6 +78,7 @@ class VorotaBotApp {
   private busy: Record<string, boolean> = {};
   private isWireGuard = false;
   private passwordConfigured = false;
+  private isSetupRequired = false;
 
   constructor() {
     this.initGateActions();
@@ -694,6 +696,7 @@ class VorotaBotApp {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/system/ota', true);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('X-Requested-With', 'vorota');
     const token = localStorage.getItem('vorota_auth_token');
     if (token) {
       xhr.setRequestHeader('X-Auth-Token', token);
@@ -724,7 +727,9 @@ class VorotaBotApp {
   }
 
   private getHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = {
+      'X-Requested-With': 'vorota'
+    };
     const token = localStorage.getItem('vorota_auth_token');
     if (token) {
       headers['X-Auth-Token'] = token;
@@ -739,10 +744,15 @@ class VorotaBotApp {
         const data: AuthStatus = await res.json();
         this.isWireGuard = data.is_wireguard;
         this.passwordConfigured = data.password_configured;
+        this.isSetupRequired = Boolean(data.setup_required);
         this.updateAuthUi();
 
-        if (!data.is_wireguard && data.password_configured && !data.authenticated) {
-          this.showAuthModal();
+        if (!data.is_wireguard) {
+          if (data.setup_required || (data.password_configured && !data.authenticated)) {
+            this.showAuthModal();
+          } else {
+            this.hideAuthModal();
+          }
         } else {
           this.hideAuthModal();
         }
@@ -754,11 +764,27 @@ class VorotaBotApp {
 
   private showAuthModal(): void {
     const backdrop = document.getElementById('auth-backdrop');
+    const titleEl = document.querySelector('#auth-sheet .modal-title') as HTMLElement | null;
+    const subEl = document.querySelector('#auth-sheet .modal-subtitle') as HTMLElement | null;
+    const btnSubmit = document.getElementById('btn-submit-login') as HTMLElement | null;
+    const input = document.getElementById('input-login-pass') as HTMLInputElement | null;
+
+    if (this.isSetupRequired) {
+      if (titleEl) titleEl.innerText = 'Admin Setup';
+      if (subEl) subEl.innerText = 'Configure master password (min 6 characters)';
+      if (btnSubmit) btnSubmit.innerText = 'Save Password';
+      if (input) input.placeholder = 'Create Password';
+    } else {
+      if (titleEl) titleEl.innerText = 'VorotaBot';
+      if (subEl) subEl.innerText = 'Local Wi-Fi authentication required';
+      if (btnSubmit) btnSubmit.innerText = 'Unlock Dashboard';
+      if (input) input.placeholder = 'Enter Password';
+    }
+
     if (backdrop?.classList.contains('open')) {
       return; // Modal is already open, do not clear user typing!
     }
     backdrop?.classList.add('open');
-    const input = document.getElementById('input-login-pass') as HTMLInputElement | null;
     if (input) {
       input.value = '';
       setTimeout(() => input.focus(), 150);
@@ -818,10 +844,23 @@ class VorotaBotApp {
         return;
       }
 
+      if (this.isSetupRequired && password.length < 6) {
+        if (errEl) {
+          errEl.innerText = 'Password must be at least 6 characters';
+          errEl.style.display = 'block';
+        }
+        return;
+      }
+
+      const endpoint = this.isSetupRequired ? '/api/auth/setup' : '/api/auth/login';
+
       try {
-        const res = await fetch('/api/auth/login', {
+        const res = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'vorota'
+          },
           body: JSON.stringify({ password })
         });
 
@@ -830,20 +869,22 @@ class VorotaBotApp {
           if (data.token) {
             localStorage.setItem('vorota_auth_token', data.token);
           }
+          this.isSetupRequired = false;
           this.hideAuthModal();
           await this.checkAuthStatus();
           this.fetchSystemInfo();
           this.fetchGateStatus();
         } else {
+          const errData = await res.json().catch(() => ({}));
           if (errEl) {
-            errEl.innerText = 'Incorrect password';
+            errEl.innerText = errData.message || (this.isSetupRequired ? 'Setup failed' : 'Incorrect password');
             errEl.style.display = 'block';
           }
           if (passInput) passInput.select();
         }
       } catch (err: any) {
         if (errEl) {
-          errEl.innerText = 'Login error: ' + err.message;
+          errEl.innerText = 'Error: ' + err.message;
           errEl.style.display = 'block';
         }
       }
@@ -856,11 +897,10 @@ class VorotaBotApp {
   }
 
   private async postJson(url: string, data: any): Promise<any> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    const token = localStorage.getItem('vorota_auth_token');
-    if (token) {
-      headers['X-Auth-Token'] = token;
-    }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...this.getHeaders()
+    };
     const res = await fetch(url, {
       method: 'POST',
       headers,

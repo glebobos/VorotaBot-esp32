@@ -26,6 +26,13 @@ esp_err_t ota_manager_init(void) {
         snprintf(s_status.next_partition_label, sizeof(s_status.next_partition_label), "%s", next->label);
     }
 
+    ESP_LOGI(TAG, "OTA Subsystem Ready: Running='%s' (Ver: %s), Next Target='%s'",
+             s_status.current_partition_label, s_status.current_app_version, s_status.next_partition_label);
+    return ESP_OK;
+}
+
+void ota_manager_confirm_valid(void) {
+    const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t ota_state;
     if (running && esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
         if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
@@ -33,10 +40,6 @@ esp_err_t ota_manager_init(void) {
             esp_ota_mark_app_valid_cancel_rollback();
         }
     }
-
-    ESP_LOGI(TAG, "OTA Subsystem Ready: Running='%s' (Ver: %s), Next Target='%s'",
-             s_status.current_partition_label, s_status.current_app_version, s_status.next_partition_label);
-    return ESP_OK;
 }
 
 esp_err_t ota_manager_begin(size_t image_size) {

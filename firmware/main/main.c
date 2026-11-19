@@ -106,6 +106,9 @@ void app_main(void) {
     };
     ESP_ERROR_CHECK(web_server_start(&ws_cfg));
 
+    // Confirm OTA image only after Wi-Fi, Web Server, and Auth initialized without crashing
+    ota_manager_confirm_valid();
+
     // 10. System Ready Banner
     ESP_LOGI(TAG, "=================================================");
     ESP_LOGI(TAG, "  VOROTABOT READY & ONLINE");

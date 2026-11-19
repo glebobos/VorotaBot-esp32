@@ -74,6 +74,7 @@ void auth_rotate_session_token(void) {
 
 void auth_init(void) {
     if (s_auth_initialized) return;
+    s_auth_initialized = true;
 
     auth_rotate_session_token();
 

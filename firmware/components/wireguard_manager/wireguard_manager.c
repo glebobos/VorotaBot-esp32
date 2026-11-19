@@ -15,6 +15,8 @@
 
 static const char *TAG = "WG_MGR";
 
+#define WG_RECONNECT_INTERVAL_SEC (15 * 60) // Periodic tunnel refresh every 15 minutes
+
 static wg_manager_config_t s_config;
 static wireguard_status_t s_status;
 static SemaphoreHandle_t s_lock = NULL;
@@ -195,7 +197,9 @@ static void wireguard_tunnel_task(void *pvParameters) {
         err = esp_wireguard_connect(&wg_ctx);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_wireguard_connect failed: %s. Retrying in 5s...", esp_err_to_name(err));
-            esp_wireguard_disconnect(&wg_ctx);
+            if (wg_ctx.netif != NULL) {
+                esp_wireguard_disconnect(&wg_ctx);
+            }
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
             continue;
         }
@@ -252,6 +256,7 @@ static void wireguard_tunnel_task(void *pvParameters) {
         uint32_t uptime = 0;
         int missed_handshake_count = 0;
         const int MAX_MISSED_CHECKS = 12; // 12 * 5s = 60 seconds without peer response
+        bool scheduled_refresh = false;
 
         while (1) {
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
@@ -268,6 +273,13 @@ static void wireguard_tunnel_task(void *pvParameters) {
             }
 
             uptime += 5;
+            if (uptime >= WG_RECONNECT_INTERVAL_SEC) {
+                ESP_LOGI(TAG, "Periodic WireGuard refresh (%lu s). Rebuilding tunnel...",
+                         (unsigned long)uptime);
+                scheduled_refresh = true;
+                break;
+            }
+
             bool up = (esp_wireguardif_peer_is_up(&wg_ctx) == ESP_OK);
             xSemaphoreTake(s_lock, portMAX_DELAY);
             s_status.uptime_seconds = uptime;
@@ -296,7 +308,7 @@ static void wireguard_tunnel_task(void *pvParameters) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_status.is_connected = false;
         s_status.uptime_seconds = 0;
-        should_cooldown = (s_wifi_connected && s_config.enabled && !s_config_updated);
+        should_cooldown = (s_wifi_connected && s_config.enabled && !s_config_updated && !scheduled_refresh);
         xSemaphoreGive(s_lock);
 
         ESP_LOGI(TAG, "WireGuard monitor loop exited (Wi-Fi connected: %s, Enabled: %s)",

@@ -24,6 +24,12 @@ typedef struct {
 esp_err_t ota_manager_init(void);
 
 /**
+ * @brief Confirm running OTA image is valid and cancel bootloader auto-rollback.
+ * Call after critical subsystems (Wi-Fi, web server) have initialized.
+ */
+void ota_manager_confirm_valid(void);
+
+/**
  * @brief Begin an OTA update session.
  * Prepares the next available OTA app partition for writing.
  *
